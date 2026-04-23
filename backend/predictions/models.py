@@ -52,7 +52,8 @@ class MLModel(models.Model):
         ('random_forest', 'Random Forest'),
         ('svm',           'Support Vector Machine'),
         ('xgboost',       'XGBoost'),
-        ('deep_learning', 'Deep Learning')
+        ('deep_learning', 'Deep Learning'),
+        ('other',         'Other'),
     ])
 
     accuracy  = models.FloatField()

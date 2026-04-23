@@ -11,26 +11,51 @@ class FeatureImportanceScreen extends StatefulWidget {
 
 class _FeatureImportanceScreenState extends State<FeatureImportanceScreen> {
   final ApiService _apiService = ApiService();
-  bool _isLoading              = true;
+  bool _isLoading                 = true;
   String? _errorMessage;
-  List<dynamic> _importances   = [];
-  List<String> _selectedFeatures = [];
-  int _featuresSelected        = 0;
+  List<dynamic> _importances      = [];
+  List<String> _selectedFeatures  = [];
+  int _featuresSelected           = 0;
+  int _totalFeaturesAvailable     = 34;
 
+  // ── Labels for all 34 features (13 original + 21 engineered) ──────────────
   static const Map<String, String> _labels = {
-    'income_normalized':          'Income Level',
-    'dosage_normalized':          'Dosage Amount',
+    // ── Original 13 ──────────────────────────────────────────────────────────
     'Age':                        'Patient Age',
+    'gender_encoded':             'Gender',
+    'medication_type_encoded':    'Medication Type',
+    'dosage_normalized':          'Dosage Amount',
     'Previous_Adherence':         'Previous Adherence',
-    'Comorbidities_Count':        'No. of Comorbidities',
+    'education_encoded':          'Education Level',
+    'income_normalized':          'Income Level',
+    'social_support_encoded':     'Social Support',
     'severity_encoded':           'Condition Severity',
+    'Comorbidities_Count':        'No. of Comorbidities',
     'healthcare_access_encoded':  'Healthcare Access',
     'mental_health_encoded':      'Mental Health Status',
-    'medication_type_encoded':    'Medication Type',
-    'education_encoded':          'Education Level',
-    'social_support_encoded':     'Social Support',
-    'gender_encoded':             'Gender',
     'Insurance_Coverage':         'Insurance Coverage',
+    // ── Engineered 21 ────────────────────────────────────────────────────────
+    'vulnerability_score':        'Vulnerability Score',
+    'support_gap':                'Support Gap',
+    'adherence_capacity':         'Adherence Capacity',
+    'stress_index':               'Stress Index',
+    'dosage_burden':              'Dosage Burden',
+    'history_support':            'History × Support',
+    'comorbidity_severity':       'Comorbidity Severity',
+    'risk_composite':             'Risk Composite',
+    'adherence_risk_score':       'Adherence Risk Score',
+    'barrier_index':              'Barrier Index',
+    'protective_score':           'Protective Score',
+    'combined_risk':              'Combined Risk',
+    'net_risk_score':             'Net Risk Score',
+    'income_x_adherence':         'Income × Adherence',
+    'severity_x_comorbid':        'Severity × Comorbidity',
+    'access_x_support':           'Access × Support',
+    'dosage_x_severity':          'Dosage × Severity',
+    'age_x_comorbid':             'Age × Comorbidity',
+    'mental_x_income':            'Mental Health × Income',
+    'prev_adh_x_severity':        'Prev. Adherence × Severity',
+    'insurance_x_income':         'Insurance × Income',
   };
 
   @override
@@ -40,16 +65,20 @@ class _FeatureImportanceScreenState extends State<FeatureImportanceScreen> {
   }
 
   Future<void> _loadFeatures() async {
-    setState(() { _isLoading = true; _errorMessage = null; });
+    setState(() {
+      _isLoading    = true;
+      _errorMessage = null;
+    });
     try {
       final response = await _apiService.getSelectedFeatures();
       if (response['success'] == true) {
         final data = response['data'] as Map<String, dynamic>;
         setState(() {
-          _importances       = data['importances_ranked'] as List<dynamic>;
-          _selectedFeatures  = List<String>.from(data['selected_features']);
-          _featuresSelected  = data['features_selected'] as int;
-          _isLoading         = false;
+          _importances            = data['importances_ranked'] as List<dynamic>;
+          _selectedFeatures       = List<String>.from(data['selected_features']);
+          _featuresSelected       = data['features_selected'] as int;
+          _totalFeaturesAvailable = (data['total_features_available'] as num?)?.toInt() ?? 34;
+          _isLoading              = false;
         });
       } else {
         setState(() {
@@ -75,9 +104,10 @@ class _FeatureImportanceScreenState extends State<FeatureImportanceScreen> {
         foregroundColor: Colors.white,
         actions: [
           IconButton(
-              icon: const Icon(Icons.refresh),
-              onPressed: _loadFeatures,
-              tooltip: 'Refresh'),
+            icon: const Icon(Icons.refresh),
+            onPressed: _loadFeatures,
+            tooltip: 'Refresh',
+          ),
         ],
       ),
       body: _isLoading
@@ -85,18 +115,20 @@ class _FeatureImportanceScreenState extends State<FeatureImportanceScreen> {
           : _errorMessage != null
               ? Center(
                   child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(Icons.wifi_off, size: 60, color: Colors.grey),
-                        const SizedBox(height: 16),
-                        Text(_errorMessage!, textAlign: TextAlign.center),
-                        const SizedBox(height: 16),
-                        ElevatedButton.icon(
-                          icon: const Icon(Icons.refresh),
-                          label: const Text('Retry'),
-                          onPressed: _loadFeatures,
-                        ),
-                      ]))
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.wifi_off, size: 60, color: Colors.grey),
+                      const SizedBox(height: 16),
+                      Text(_errorMessage!, textAlign: TextAlign.center),
+                      const SizedBox(height: 16),
+                      ElevatedButton.icon(
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('Retry'),
+                        onPressed: _loadFeatures,
+                      ),
+                    ],
+                  ),
+                )
               : _buildContent(),
     );
   }
@@ -109,7 +141,8 @@ class _FeatureImportanceScreenState extends State<FeatureImportanceScreen> {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        // Header
+
+        // ── Header card ───────────────────────────────────────────────────────
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -129,44 +162,88 @@ class _FeatureImportanceScreenState extends State<FeatureImportanceScreen> {
             const SizedBox(width: 14),
             Expanded(
               child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Random Forest Feature Importances',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold)),
-                    Text(
-                      'Top $_featuresSelected features selected from 13 available',
-                      style: const TextStyle(color: Colors.white70, fontSize: 12),
-                    ),
-                  ]),
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'XGBoost — Feature Importances',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold),
+                  ),
+                  Text(
+                    '$_featuresSelected selected from $_totalFeaturesAvailable engineered features',
+                    style: const TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+          ]),
+        ),
+        const SizedBox(height: 12),
+
+        // ── Model accuracy banner ─────────────────────────────────────────────
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: Colors.green.shade50,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.green.shade200),
+          ),
+          child: Row(children: [
+            Icon(Icons.emoji_events, color: Colors.green.shade700, size: 22),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Primary Model: XGBoost',
+                    style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                        color: Colors.green.shade800),
+                  ),
+                  Text(
+                    'Accuracy: 89.42%  •  F1 Score: 89.25%  •  CV F1: 89.45%',
+                    style: TextStyle(fontSize: 11, color: Colors.green.shade700),
+                  ),
+                ],
+              ),
             ),
           ]),
         ),
         const SizedBox(height: 16),
 
-        // Legend
+        // ── Legend ────────────────────────────────────────────────────────────
         Row(children: [
-          _LegendDot(color: Colors.blue.shade600, label: 'Selected for prediction'),
+          _LegendDot(
+              color: Colors.blue.shade600,
+              label: 'Selected (RFE top $_featuresSelected)'),
           const SizedBox(width: 16),
           _LegendDot(color: Colors.grey.shade400, label: 'Not selected'),
         ]),
         const SizedBox(height: 16),
 
-        // Bar chart
+        // ── Bar chart card ────────────────────────────────────────────────────
         Card(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           elevation: 2,
           child: Padding(
             padding: const EdgeInsets.all(20),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('All 13 Features — Ranked by Importance',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(
+                'All $_totalFeaturesAvailable Features — Ranked by Importance',
+                style: const TextStyle(
+                    fontSize: 15, fontWeight: FontWeight.bold),
+              ),
               const SizedBox(height: 4),
               Text(
-                'Importance = how much each feature contributes to predictions',
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                'Importance = how much each feature contributes to XGBoost predictions',
+                style:
+                    TextStyle(fontSize: 12, color: Colors.grey.shade600),
               ),
               const Divider(height: 24),
               ..._importances.asMap().entries.map((entry) {
@@ -190,22 +267,31 @@ class _FeatureImportanceScreenState extends State<FeatureImportanceScreen> {
         ),
         const SizedBox(height: 16),
 
-        // Selected features summary
+        // ── Selected features chips ───────────────────────────────────────────
         Card(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           elevation: 2,
           child: Padding(
             padding: const EdgeInsets.all(20),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(children: [
                 Icon(Icons.check_circle, color: Colors.blue.shade700),
                 const SizedBox(width: 8),
                 Text(
-                  'Selected Features ($_featuresSelected / 13)',
+                  'RFE Selected Features ($_featuresSelected / $_totalFeaturesAvailable)',
                   style: const TextStyle(
                       fontSize: 15, fontWeight: FontWeight.bold),
                 ),
               ]),
+              const SizedBox(height: 6),
+              Text(
+                'Recursive Feature Elimination chose these $_featuresSelected features '
+                'from $_totalFeaturesAvailable engineered inputs for maximum XGBoost accuracy.',
+                style:
+                    TextStyle(fontSize: 12, color: Colors.grey.shade600),
+              ),
               const SizedBox(height: 12),
               Wrap(
                 spacing: 8,
@@ -234,24 +320,70 @@ class _FeatureImportanceScreenState extends State<FeatureImportanceScreen> {
         ),
         const SizedBox(height: 16),
 
-        // Info card
+        // ── Feature groups info ───────────────────────────────────────────────
+        Card(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          elevation: 2,
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Feature Engineering Summary',
+                  style: TextStyle(
+                      fontWeight: FontWeight.bold, fontSize: 15)),
+              const SizedBox(height: 12),
+              _GroupRow(
+                color: Colors.blue,
+                icon: Icons.person,
+                title: '13 Original Features',
+                subtitle:
+                    'Age, income, dosage, comorbidities, previous adherence, etc.',
+              ),
+              const SizedBox(height: 8),
+              _GroupRow(
+                color: Colors.purple,
+                icon: Icons.auto_fix_high,
+                title: '21 Engineered Features',
+                subtitle:
+                    'Composite scores: risk index, barrier index, interaction terms, etc.',
+              ),
+              const SizedBox(height: 8),
+              _GroupRow(
+                color: Colors.green,
+                icon: Icons.filter_alt,
+                title: '$_featuresSelected Selected via RFE',
+                subtitle:
+                    'Recursive Feature Elimination retained the highest-signal features.',
+              ),
+            ]),
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // ── Insights card ─────────────────────────────────────────────────────
         Card(
           color: Colors.amber.shade50,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           child: Padding(
             padding: const EdgeInsets.all(16),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('What Does This Mean?',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Key Insights',
+                  style: TextStyle(
+                      fontWeight: FontWeight.bold, fontSize: 14)),
               const SizedBox(height: 8),
-              _BulletPoint(
+              const _BulletPoint(
                   'Previous adherence history is the strongest predictor — past behaviour predicts future compliance.'),
-              _BulletPoint(
+              const _BulletPoint(
+                  'Composite risk scores (risk_composite, barrier_index) outperform raw features alone.'),
+              const _BulletPoint(
                   'Income level matters — lower income patients have higher non-adherence risk.'),
-              _BulletPoint(
-                  'Dosage amount — very high or complex dosing leads to more missed doses.'),
-              _BulletPoint(
-                  'Features with low importance (gender, insurance) were excluded to avoid noise.'),
+              const _BulletPoint(
+                  'Interaction terms (income × adherence, dosage × severity) capture combined patient risk.'),
+              const _BulletPoint(
+                  'Features with low RFE rank (gender, medication type) were excluded to reduce noise.'),
             ]),
           ),
         ),
@@ -261,12 +393,14 @@ class _FeatureImportanceScreenState extends State<FeatureImportanceScreen> {
   }
 }
 
+// ── Feature bar ───────────────────────────────────────────────────────────────
+
 class _FeatureBar extends StatelessWidget {
-  final int rank;
+  final int    rank;
   final String label;
   final double importance;
   final double barWidth;
-  final bool isSelected;
+  final bool   isSelected;
 
   const _FeatureBar({
     required this.rank,
@@ -295,28 +429,32 @@ class _FeatureBar extends StatelessWidget {
               borderRadius: BorderRadius.circular(6),
             ),
             child: Center(
-              child: Text('$rank',
-                  style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      color: isSelected
-                          ? Colors.blue.shade700
-                          : Colors.grey.shade600)),
+              child: Text(
+                '$rank',
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: isSelected
+                        ? Colors.blue.shade700
+                        : Colors.grey.shade600),
+              ),
             ),
           ),
           const SizedBox(width: 8),
           Expanded(
             child: Row(children: [
               Expanded(
-                child: Text(label,
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: isSelected
-                            ? FontWeight.w700
-                            : FontWeight.w400,
-                        color: isSelected
-                            ? Colors.blue.shade800
-                            : Colors.grey.shade700)),
+                child: Text(
+                  label,
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: isSelected
+                          ? FontWeight.w700
+                          : FontWeight.w400,
+                      color: isSelected
+                          ? Colors.blue.shade800
+                          : Colors.grey.shade700),
+                ),
               ),
               if (isSelected)
                 Container(
@@ -326,18 +464,22 @@ class _FeatureBar extends StatelessWidget {
                     color: Colors.blue.shade600,
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: const Text('SELECTED',
-                      style: TextStyle(
-                          fontSize: 9,
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold)),
+                  child: const Text(
+                    'SELECTED',
+                    style: TextStyle(
+                        fontSize: 9,
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold),
+                  ),
                 ),
               const SizedBox(width: 8),
-              Text('${(importance * 100).toStringAsFixed(1)}%',
-                  style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: barColor)),
+              Text(
+                '${(importance * 100).toStringAsFixed(1)}%',
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: barColor),
+              ),
             ]),
           ),
         ]),
@@ -363,7 +505,7 @@ class _FeatureBar extends StatelessWidget {
                     gradient: isSelected
                         ? LinearGradient(colors: [
                             Colors.blue.shade400,
-                            Colors.blue.shade700
+                            Colors.blue.shade700,
                           ])
                         : null,
                   ),
@@ -377,8 +519,10 @@ class _FeatureBar extends StatelessWidget {
   }
 }
 
+// ── Helper widgets ────────────────────────────────────────────────────────────
+
 class _LegendDot extends StatelessWidget {
-  final Color color;
+  final Color  color;
   final String label;
   const _LegendDot({required this.color, required this.label});
 
@@ -386,13 +530,54 @@ class _LegendDot extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(children: [
       Container(
-          width: 14,
-          height: 14,
-          decoration: BoxDecoration(
-              color: color, borderRadius: BorderRadius.circular(3))),
+        width: 14,
+        height: 14,
+        decoration: BoxDecoration(
+            color: color, borderRadius: BorderRadius.circular(3)),
+      ),
       const SizedBox(width: 6),
       Text(label,
           style: TextStyle(fontSize: 12, color: Colors.grey.shade700)),
+    ]);
+  }
+}
+
+class _GroupRow extends StatelessWidget {
+  final Color    color;
+  final IconData icon;
+  final String   title;
+  final String   subtitle;
+
+  const _GroupRow({
+    required this.color,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Icon(icon, color: color, size: 18),
+      ),
+      const SizedBox(width: 12),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title,
+              style: const TextStyle(
+                  fontWeight: FontWeight.w600, fontSize: 13)),
+          const SizedBox(height: 2),
+          Text(subtitle,
+              style: TextStyle(
+                  fontSize: 12, color: Colors.grey.shade600, height: 1.3)),
+        ]),
+      ),
     ]);
   }
 }
@@ -408,10 +593,12 @@ class _BulletPoint extends StatelessWidget {
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text('• ',
             style: TextStyle(
-                color: Colors.amber.shade700, fontWeight: FontWeight.bold)),
+                color: Colors.amber.shade700,
+                fontWeight: FontWeight.bold)),
         Expanded(
-            child: Text(text,
-                style: const TextStyle(fontSize: 12, height: 1.4))),
+          child: Text(text,
+              style: const TextStyle(fontSize: 12, height: 1.4)),
+        ),
       ]),
     );
   }

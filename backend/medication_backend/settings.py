@@ -24,8 +24,8 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'corsheaders',
-    'django_celery_beat',      # ✅ Celery beat scheduler
-    'django_celery_results',   # ✅ Store task results in DB
+    'django_celery_beat',
+    'django_celery_results',
 
     # Our apps
     'accounts',
@@ -116,28 +116,38 @@ CORS_ALLOWED_ORIGINS = [
 ]
 CORS_ALLOW_ALL_ORIGINS = True
 
-# Tesseract OCR
+# ── Tesseract OCR (local fallback) ─────────────────────────────────────────
 TESSERACT_CMD = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-# Twilio SMS
+# ── Twilio SMS ─────────────────────────────────────────────────────────────
 USE_TWILIO          = True
 TWILIO_ACCOUNT_SID  = 'AC4c7a1c839c7e5390b02f84d2afcf9064'
 TWILIO_AUTH_TOKEN   = 'e6a61cd2d01fca383f8496619b78a9d0'
 TWILIO_PHONE_NUMBER = '+12605445856'
 
-# ── Celery + Redis ────────────────────────────────────────────────────────────
+# ── Celery + Redis ─────────────────────────────────────────────────────────
 CELERY_BROKER_URL         = 'redis://127.0.0.1:6379/0'
-CELERY_RESULT_BACKEND     = 'django-db'           # store results in Django DB
+CELERY_RESULT_BACKEND     = 'django-db'
 CELERY_ACCEPT_CONTENT     = ['json']
 CELERY_TASK_SERIALIZER    = 'json'
 CELERY_RESULT_SERIALIZER  = 'json'
 CELERY_TIMEZONE           = 'Asia/Kolkata'
 CELERY_ENABLE_UTC         = True
 
-# Celery Beat — runs the send_due_reminders task every minute
 CELERY_BEAT_SCHEDULE = {
     'send-due-reminders-every-minute': {
         'task':     'notifications.tasks.send_due_reminders',
-        'schedule': 60.0,   # every 60 seconds
+        'schedule': 60.0,
     },
 }
+
+# ── Google Cloud Vision (optional — needs google_credentials.json) ─────────
+GOOGLE_CLOUD_VISION_CREDENTIALS = BASE_DIR / 'google_credentials.json'
+
+# ── Gemini Vision API (FREE — primary OCR for handwritten prescriptions) ───
+# Get free key at: https://aistudio.google.com (no credit card needed)
+# Free tier: 15 requests/minute, 1500/day
+GEMINI_API_KEY = "AIzaSyB1YUN6dRm5JrA55Qsie4FE031S99WrniM"
+
+# ── OCR.space (free text OCR fallback — 25k requests/month) ────────────────
+OCR_SPACE_API_KEY = "K89361646188957"

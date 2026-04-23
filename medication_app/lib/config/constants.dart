@@ -4,7 +4,7 @@ class AppConstants {
   // Flutter Web (Chrome/Edge): use http://127.0.0.1:8000/api
   // Android Emulator:          use http://10.0.2.2:8000/api
   // Physical Device:           use http://YOUR_PC_IP:8000/api
-  static const String baseUrl = 'http://172.20.10.3:8000/api';
+  static const String baseUrl = 'http://192.168.1.9:8000/api';
 
   // Auth endpoints
   static const String loginDoctor    = '/auth/doctor/login/';

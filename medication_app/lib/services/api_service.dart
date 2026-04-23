@@ -271,21 +271,24 @@ class ApiService {
         '${AppConstants.scheduleReminders}$prescriptionId/schedule/', {});
   }
 
-  // Default — returns today's reminders
   Future<Map<String, dynamic>> getPatientReminders(int patientId) async {
     return await get(
         '${AppConstants.getPatientReminders}$patientId/reminders/?filter=today');
   }
 
-  // ✅ Filtered — today / upcoming / all
   Future<Map<String, dynamic>> getPatientRemindersFiltered(
       int patientId, String filter) async {
     return await get(
         '${AppConstants.getPatientReminders}$patientId/reminders/?filter=$filter');
   }
 
-  // ✅ Mark reminder as taken
   Future<Map<String, dynamic>> markReminderTaken(int reminderId) async {
     return await post('/notifications/reminder/$reminderId/taken/', {});
+  }
+
+  // ── Patient Monitoring API (NEW) ──────────────────────────────────────────
+
+  Future<Map<String, dynamic>> getPatientMonitoring(int patientId) async {
+    return await get('/auth/patient/$patientId/monitoring/');
   }
 }

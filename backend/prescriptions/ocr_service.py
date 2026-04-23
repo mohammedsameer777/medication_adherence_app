@@ -1,262 +1,592 @@
-import pytesseract
-from PIL import Image
+"""
+OCR SERVICE — Gemini Vision primary parser
+Gemini 1.5 Flash reads prescription images directly (free, handles handwriting).
+
+Priority:
+  1. Gemini Vision  — reads image directly, free tier, handles handwriting + typed
+  2. OCR.space      — free text OCR fallback (25k/month)
+  3. Tesseract      — local fallback
+
+Add to settings.py:
+  GEMINI_API_KEY    = "AIza..."   # aistudio.google.com (free, no credit card)
+  OCR_SPACE_API_KEY = "..."       # ocr.space (25k free/month)
+
+BUG FIX: Removed recursive call — extract_text() was calling itself.
+"""
+
 import re
+import os
+import json
+import base64
+import urllib.request
+import urllib.error
+import urllib.parse
 from django.conf import settings
 
 try:
+    from google.cloud import vision
+    from google.oauth2 import service_account
+    GOOGLE_VISION_AVAILABLE = True
+except ImportError:
+    GOOGLE_VISION_AVAILABLE = False
+
+try:
+    import pytesseract
+    from PIL import Image
+    TESSERACT_AVAILABLE = True
+    try:
+        pytesseract.pytesseract.tesseract_cmd = getattr(
+            settings, 'TESSERACT_CMD',
+            r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+        )
+    except Exception:
+        pass
+except ImportError:
+    TESSERACT_AVAILABLE = False
+
+try:
     import cv2
-    import numpy as np
     USE_OPENCV = True
 except ImportError:
     USE_OPENCV = False
-    print("OpenCV not available, using PIL only for OCR")
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GEMINI VISION — FREE, reads handwriting perfectly
+# Get key at: https://aistudio.google.com (no credit card)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _parse_with_gemini_vision(image_path):
+    api_key = getattr(settings, 'GEMINI_API_KEY', None) or os.environ.get('GEMINI_API_KEY')
+    if not api_key:
+        print("   ⚠️  GEMINI_API_KEY not set. Get free key at: https://aistudio.google.com")
+        return None
+
+    try:
+        with open(image_path, 'rb') as f:
+            image_data = base64.b64encode(f.read()).decode('utf-8')
+
+        ext       = os.path.splitext(image_path)[1].lower()
+        mime_map  = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                     '.png': 'image/png',  '.bmp':  'image/bmp',
+                     '.tiff': 'image/tiff', '.tif': 'image/tiff'}
+        mime_type = mime_map.get(ext, 'image/jpeg')
+
+        prompt = """You are a medical prescription parser. Read this prescription carefully.
+It may be handwritten, printed, or mixed.
+
+Return ONLY a JSON object, no markdown, no explanation:
+
+{
+  "patient_name": "full name or null",
+  "age": integer_or_null,
+  "disease": "diagnosis or null",
+  "treatment_duration_days": integer_default_7,
+  "medicines": [
+    {
+      "name": "medicine name",
+      "dosage": "e.g. 500mg or 1 tablet",
+      "frequency": "N times daily",
+      "duration_days": integer
+    }
+  ]
+}
+
+Rules:
+- Extract ONLY actual medicine/drug names
+- T. or Tab. prefix before a medicine name means tablet — include the name after it
+- Do NOT include doctor name, hospital, patient name, address
+- frequency = "N times daily" where N is a number
+- If dosage unclear: "1 tablet"
+- If duration unclear: 7
+- Return [] if no medicines found
+- Return ONLY the JSON"""
+
+        payload = json.dumps({
+            "contents": [{
+                "parts": [
+                    {"inline_data": {"mime_type": mime_type, "data": image_data}},
+                    {"text": prompt}
+                ]
+            }],
+            "generationConfig": {"temperature": 0.1, "maxOutputTokens": 1024}
+        }).encode('utf-8')
+
+        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+               f"gemini-1.5-flash:generateContent?key={api_key}")
+
+        req = urllib.request.Request(
+            url, data=payload,
+            headers={'Content-Type': 'application/json'},
+            method='POST'
+        )
+
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data     = json.loads(resp.read().decode('utf-8'))
+            raw_text = data['candidates'][0]['content']['parts'][0]['text'].strip()
+            raw_text = re.sub(r'^```(?:json)?\s*', '', raw_text)
+            raw_text = re.sub(r'\s*```$', '', raw_text).strip()
+
+            result = json.loads(raw_text)
+
+            medicines = []
+            for m in result.get('medicines', []):
+                if not isinstance(m, dict) or not m.get('name'):
+                    continue
+                name = str(m['name']).strip()
+                if len(name) < 2:
+                    continue
+                freq_raw   = str(m.get('frequency', '1 times daily'))
+                freq_match = re.search(r'(\d+)', freq_raw)
+                freq       = f"{freq_match.group(1)} times daily" if freq_match else "1 times daily"
+                try:
+                    dur = max(1, min(int(m.get('duration_days', 7)), 365))
+                except (ValueError, TypeError):
+                    dur = 7
+                dosage = str(m.get('dosage', '1 tablet')).strip() or '1 tablet'
+                medicines.append({'name': name, 'dosage': dosage,
+                                  'frequency': freq, 'duration_days': dur})
+                print(f"   🔮 Gemini: {name} | {dosage} | {freq} | {dur}d")
+
+            age = result.get('age')
+            try:
+                age = int(age)
+                if not (1 <= age <= 120):
+                    age = None
+            except (ValueError, TypeError):
+                age = None
+
+            try:
+                duration = max(1, min(int(result.get('treatment_duration_days', 7)), 365))
+            except (ValueError, TypeError):
+                duration = 7
+
+            print(f"   ✅ Gemini done: {len(medicines)} medicines found")
+            return {
+                'patient_name':            result.get('patient_name'),
+                'age':                     age,
+                'disease':                 result.get('disease'),
+                'medicines':               medicines,
+                'treatment_duration_days': duration,
+            }
+
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()[:300]
+        print(f"   ❌ Gemini HTTP error {e.code}: {body}")
+        if e.code == 429:
+            print("   ℹ️  Rate limit — free tier is 15 req/min. Falling back.")
+        return None
+    except json.JSONDecodeError as e:
+        print(f"   ❌ Gemini JSON parse error: {e}")
+        return None
+    except Exception as e:
+        print(f"   ❌ Gemini error: {e}")
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TEXT EXTRACTION helpers (Google Vision / OCR.space / Tesseract)
+# These only extract raw text — no recursion possible
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _text_from_google_vision(image_path, gv_client):
+    """Extract text using Google Cloud Vision client."""
+    try:
+        with open(image_path, 'rb') as f:
+            content = f.read()
+        image    = vision.Image(content=content)
+        response = gv_client.document_text_detection(image=image)
+        if response.error.message:
+            return ""
+        if response.full_text_annotation:
+            return response.full_text_annotation.text
+        texts = response.text_annotations
+        return texts[0].description if texts else ""
+    except Exception as e:
+        print(f"   ❌ Google Vision error: {e}")
+        return ""
+
+
+def _text_from_ocrspace(image_path):
+    """Extract text using OCR.space free API."""
+    api_key = getattr(settings, 'OCR_SPACE_API_KEY', None) or os.environ.get('OCR_SPACE_API_KEY')
+    if not api_key:
+        return ""
+    try:
+        with open(image_path, 'rb') as f:
+            image_data = base64.b64encode(f.read()).decode('utf-8')
+        ext       = os.path.splitext(image_path)[1].lower()
+        mime_map  = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                     '.png': 'image/png',  '.bmp':  'image/bmp'}
+        mime_type = mime_map.get(ext, 'image/jpeg')
+        payload   = urllib.parse.urlencode({
+            'base64Image': f"data:{mime_type};base64,{image_data}",
+            'apikey': api_key, 'language': 'eng',
+            'isOverlayRequired': 'false', 'detectOrientation': 'true',
+            'scale': 'true', 'OCREngine': '2', 'isTable': 'true',
+        }).encode('utf-8')
+        req = urllib.request.Request(
+            'https://api.ocr.space/parse/image', data=payload,
+            headers={'Content-Type': 'application/x-www-form-urlencoded'},
+            method='POST'
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode('utf-8'))
+            if result.get('IsErroredOnProcessing'):
+                return ""
+            parsed = result.get('ParsedResults', [])
+            if not parsed:
+                return ""
+            text = parsed[0].get('ParsedText', '').strip()
+            if text:
+                print(f"   ✅ OCR.space: {len(text)} chars.")
+            return text
+    except Exception as e:
+        print(f"   ❌ OCR.space error: {e}")
+        return ""
+
+
+def _text_from_tesseract(image_path):
+    """Extract text using local Tesseract."""
+    if not TESSERACT_AVAILABLE:
+        return ""
+    try:
+        if USE_OPENCV:
+            import numpy as np
+            img      = cv2.imread(image_path)
+            gray     = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            thresh   = cv2.adaptiveThreshold(
+                gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY, 31, 2)
+            denoised = cv2.fastNlMeansDenoising(thresh, None, 10, 7, 21)
+            text     = pytesseract.image_to_string(denoised, config='--psm 6 --oem 3')
+        else:
+            img  = Image.open(image_path).convert('L')
+            text = pytesseract.image_to_string(img, config='--psm 6 --oem 3')
+        if text:
+            print(f"   Tesseract: {len(text)} chars.")
+        return text
+    except Exception as e:
+        print(f"   ❌ Tesseract error: {e}")
+        return ""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIELD EXTRACTORS from text
+# ─────────────────────────────────────────────────────────────────────────────
+
+NON_MEDICINE = {
+    'prescription', 'patient', 'doctor', 'date', 'diagnosis', 'name',
+    'age', 'gender', 'hospital', 'clinic', 'address', 'phone',
+    'signature', 'frequency', 'duration', 'dosage', 'refill', 'medicine',
+    'for', 'the', 'and', 'with', 'times', 'time', 'daily', 'weekly',
+    'once', 'twice', 'thrice', 'morning', 'evening', 'night', 'before',
+    'after', 'meal', 'meals', 'food', 'water', 'take', 'days', 'weeks',
+    'months', 'stat', 'bp', 'hr', 'spo2', 'temp', 'wt', 'weight',
+    'free', 'home', 'delivery', 'r', 'rx', 'mg', 'ml', 'tab',
+    'reg', 'no', 'city', 'general', 'physician', 'consultant',
+    'dr', 'smith', 'john',
+}
+
+
+def _extract_patient_name(text):
+    for pattern in [
+        r'Patient\s*Name\s*[:;-]?\s*([A-Za-z][A-Za-z\s]{2,40})',
+        r'Name\s*[:;-]?\s*([A-Za-z][A-Za-z\s]{2,40})',
+        r'Patient\s*[:;-]?\s*([A-Za-z][A-Za-z\s]{2,40})',
+    ]:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            name = re.sub(r'\s+', ' ', m.group(1).strip())
+            name = re.split(r'\b(age|date|phone|address|mr|mrs|dr|sex|gender)\b',
+                            name, flags=re.IGNORECASE)[0].strip()
+            if 3 <= len(name) <= 50:
+                return name
+    return None
+
+
+def _extract_age(text):
+    for pattern in [
+        r'Age\s*[:;-]?\s*(\d{1,3})',
+        r'(\d{1,3})\s*/\s*[MmFf]',
+        r'(\d{1,3})\s*years?',
+        r'(\d{1,3})\s*yrs?',
+    ]:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            age = int(m.group(1))
+            if 1 <= age <= 120:
+                return age
+    return None
+
+
+def _extract_disease(text):
+    for pattern in [
+        r'Diagnosis\s*[:;-]?\s*([A-Za-z][A-Za-z\s,]{2,40})',
+        r'Disease\s*[:;-]?\s*([A-Za-z][A-Za-z\s,]{2,40})',
+        r'Dx\s*[:;-]?\s*([A-Za-z][A-Za-z\s,]{2,40})',
+        r'Condition\s*[:;-]?\s*([A-Za-z][A-Za-z\s,]{2,40})',
+        r'(?:C/O|c/o)\s*[:;-]?\s*([A-Za-z][A-Za-z\s,]{2,40})',
+    ]:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            disease = re.sub(r'\s+', ' ', m.group(1).strip()).split('\n')[0].strip()
+            disease = re.split(
+                r'\b(medicine|dosage|frequency|duration|doctor|physician|hospital|tablet|reg)\b',
+                disease, flags=re.IGNORECASE)[0].strip().rstrip('R').strip()
+            if 3 <= len(disease) <= 60:
+                return disease
+    common = ['diabetes', 'hypertension', 'fever', 'cold', 'cough',
+              'headache', 'infection', 'asthma', 'arthritis', 'migraine']
+    text_lower = text.lower()
+    for d in common:
+        if d in text_lower:
+            return d.title()
+    return None
+
+
+def _extract_duration(text):
+    for pattern in [
+        r'Duration\s*[:;-]?\s*(\d+)\s*days?',
+        r'for\s*(\d+)\s*days?',
+        r'(\d+)\s*days?',
+    ]:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            d = int(m.group(1))
+            if 1 <= d <= 365:
+                return d
+    return 7
+
+
+def _extract_medicines_regex(text):
+    medicines  = []
+    seen_names = set()
+
+    DOSAGE_RE = re.compile(
+        r'\b(\d+(?:\.\d+)?\s*(?:mg|mcg|ml|iu|g|gm|units?|tablet|tab|cap|caps))\b',
+        re.IGNORECASE)
+    TIMING_RE = re.compile(r'(\d)\s*[-–]\s*(\d)\s*[-–]\s*(\d)')
+    FREQ_RE   = re.compile(r'(\d+)\s*(?:times?\s*(?:a\s*)?daily|x\s*daily|\/day)', re.IGNORECASE)
+    ABBREV_RE = re.compile(r'\b(OD|BD|TDS|QID)\b', re.IGNORECASE)
+    DUR_RE    = re.compile(r'(\d+)\s*days?', re.IGNORECASE)
+    PREFIX_RE = re.compile(
+        r'^[-–\s]*(?:T\.|T\s+|Tab\.?\s*|Syp\.?\s*|Cap\.?\s*|Inj\.?\s*)',
+        re.IGNORECASE)
+    HEADER_RE = re.compile(
+        r'(?:medicine|drug|medication).*(?:dosage|dose|strength)', re.IGNORECASE)
+
+    def parse_freq(line):
+        tm = TIMING_RE.search(line)
+        if tm:
+            total = int(tm.group(1)) + int(tm.group(2)) + int(tm.group(3))
+            if 1 <= total <= 6:
+                return str(total)
+        ab = ABBREV_RE.search(line)
+        if ab:
+            return {'OD': '1', 'BD': '2', 'TDS': '3', 'QID': '4'}.get(ab.group(1).upper(), '1')
+        fm = FREQ_RE.search(line)
+        if fm:
+            return fm.group(1)
+        return '1'
+
+    def parse_dur(line):
+        dm = DUR_RE.search(line)
+        if dm:
+            d = int(dm.group(1))
+            if 1 <= d <= 365:
+                return d
+        return 7
+
+    def is_non_medicine(name):
+        words = name.lower().strip().split()
+        return all(w.rstrip('.,;:') in NON_MEDICINE for w in words)
+
+    def add(name, line):
+        name = re.sub(r'\s+', ' ', name.strip().rstrip('.,;:'))
+        if len(name) < 3 or is_non_medicine(name):
+            return
+        key = name.lower()
+        if key in seen_names:
+            return
+        seen_names.add(key)
+        dm     = DOSAGE_RE.search(line)
+        dosage = dm.group(1).strip() if dm else '1 tablet'
+        freq   = parse_freq(line)
+        dur    = parse_dur(line)
+        medicines.append({
+            'name':          name,
+            'dosage':        dosage,
+            'frequency':     f"{freq} times daily",
+            'duration_days': dur,
+        })
+        print(f"   💊 Regex: {name} | {dosage} | {freq}x | {dur}d")
+
+    lines    = text.split('\n')
+    s1_lines = set()
+
+    for i, line in enumerate(lines):
+        line = line.strip()
+        pm   = PREFIX_RE.match(line)
+        if not pm:
+            continue
+        s1_lines.add(i)
+        nm = re.match(r'^([A-Za-z][A-Za-z0-9\-]{1,30}(?:\s+[A-Za-z][A-Za-z0-9\-]{1,20})?)',
+                      line[pm.end():])
+        if nm:
+            add(nm.group(1), line)
+
+    in_table  = False
+    col_split = re.compile(r'[\t]')
+    for i, line in enumerate(lines):
+        if i in s1_lines:
+            continue
+        line_s = line.strip()
+        if HEADER_RE.search(line_s):
+            in_table = True
+            continue
+        if not in_table:
+            continue
+        if not line_s:
+            in_table = False
+            continue
+        cols = [c.strip() for c in col_split.split(line_s) if c.strip()]
+        if len(cols) >= 2:
+            med_name = cols[0]
+            first_w  = med_name.lower().split()[0] if med_name.split() else ''
+            if first_w in NON_MEDICINE or not re.match(r'^[A-Za-z]', med_name):
+                continue
+            if not is_non_medicine(med_name):
+                add(med_name, '\t'.join(cols))
+
+    return medicines
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Main OCR class — NO RECURSION
+# ─────────────────────────────────────────────────────────────────────────────
 
 class PrescriptionOCR:
 
     def __init__(self):
-        pytesseract.pytesseract.tesseract_cmd = settings.TESSERACT_CMD
+        self._gv_client = None
+        self._init_google_vision()
 
-    def preprocess_image_opencv(self, image_path):
-        img = cv2.imread(image_path)
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-        denoised = cv2.fastNlMeansDenoising(thresh, None, 10, 7, 21)
-        return denoised
-
-    def preprocess_image_pil(self, image_path):
-        img = Image.open(image_path)
-        img = img.convert('L')
-        return img
-
-    def extract_text(self, image_path):
+    def _init_google_vision(self):
+        if not GOOGLE_VISION_AVAILABLE:
+            return
         try:
-            if USE_OPENCV:
-                processed_img = self.preprocess_image_opencv(image_path)
-                text = pytesseract.image_to_string(processed_img)
+            creds_path = getattr(settings, 'GOOGLE_CLOUD_VISION_CREDENTIALS', None)
+            if creds_path and os.path.exists(str(creds_path)):
+                credentials = service_account.Credentials.from_service_account_file(str(creds_path))
+                self._gv_client = vision.ImageAnnotatorClient(credentials=credentials)
+                print("✅ Google Cloud Vision: service account.")
             else:
-                processed_img = self.preprocess_image_pil(image_path)
-                text = pytesseract.image_to_string(processed_img)
-            return text
+                self._gv_client = vision.ImageAnnotatorClient()
+                print("✅ Google Cloud Vision: ADC.")
         except Exception as e:
-            print(f"OCR Error: {str(e)}")
-            return ""
+            self._gv_client = None
+            print(f"⚠️  Google Cloud Vision init failed: {e}")
 
-    def extract_patient_name(self, text):
-        patterns = [
-            r'Patient\s*Name\s*[:;-]?\s*([A-Za-z][A-Za-z\s]{2,40})',
-            r'Name\s*[:;-]?\s*([A-Za-z][A-Za-z\s]{2,40})',
-            r'Patient\s*[:;-]?\s*([A-Za-z][A-Za-z\s]{2,40})',
-            r'FOR\s*[^\n]*\n\s*([A-Za-z][A-Za-z\s.,]{2,40})',
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                name = match.group(1).strip()
-                name = re.sub(r'\s+', ' ', name)
-                # Remove trailing junk words
-                name = re.split(r'\b(age|date|phone|address|mr|mrs|dr)\b', name, flags=re.IGNORECASE)[0].strip()
-                if 3 <= len(name) <= 50:
-                    return name
-        return None
-
-    def extract_age(self, text):
-        patterns = [
-            r'Age\s*[:;-]?\s*(\d{1,3})',
-            r'(\d{1,3})\s*years?',
-            r'(\d{1,3})\s*yrs?',
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                age = int(match.group(1))
-                if 1 <= age <= 120:
-                    return age
-        return None
-
-    def extract_disease(self, text):
-        patterns = [
-            r'Diagnosis\s*[:;-]?\s*([A-Za-z][A-Za-z\s]{2,60})',
-            r'Disease\s*[:;-]?\s*([A-Za-z][A-Za-z\s]{2,60})',
-            r'Condition\s*[:;-]?\s*([A-Za-z][A-Za-z\s]{2,60})',
-            r'(?:C/O|Complaint)\s*[:;-]?\s*([A-Za-z][A-Za-z\s]{2,60})',
-        ]
-        common_diseases = [
-            'diabetes', 'hypertension', 'asthma', 'arthritis', 'thyroid',
-            'fever', 'cold', 'cough', 'infection', 'blood pressure',
-            'heart disease', 'kidney disease', 'liver disease', 'headache',
-            'migraine', 'pneumonia', 'tuberculosis', 'anaemia', 'anemia',
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                disease = match.group(1).strip()
-                disease = re.sub(r'\s+', ' ', disease)
-                disease = disease.split('\n')[0].strip()
-                if 3 <= len(disease) <= 100:
-                    return disease
-        text_lower = text.lower()
-        for disease in common_diseases:
-            if disease in text_lower:
-                return disease.title()
-        return None
-
-    def extract_medicines(self, text):
+    def _get_raw_text(self, image_path):
         """
-        Extract ONLY real medicine names — not headers or frequency words.
-        A real medicine line must contain a dosage marker (mg, ml, tablet, cap, mcg, iu)
-        OR follow an Rx / medicine-list section.
+        Get raw text from image using available text-only OCR backends.
+        This method does NOT call itself — no recursion possible.
         """
-        medicines = []
+        # 1. Google Cloud Vision (if configured)
+        if self._gv_client is not None:
+            text = _text_from_google_vision(image_path, self._gv_client)
+            if text and len(text.strip()) > 10:
+                print(f"   ✅ Google Vision text: {len(text)} chars.")
+                return text
 
-        # ── Words that are NEVER medicine names ──────────────────────────────
-        SKIP_WORDS = {
-            'prescription', 'patient', 'doctor', 'date', 'diagnosis', 'name',
-            'age', 'gender', 'hospital', 'clinic', 'address', 'phone', 'sig',
-            'signature', 'rx', 'inscription', 'subscription', 'superscription',
-            'frequency', 'duration', 'dosage', 'refill', 'filled', 'lot',
-            'exp', 'mfgr', 'ndc', 'dea', 'for', 'the', 'and', 'with',
-            'times', 'time', 'daily', 'weekly', 'once', 'twice', 'thrice',
-            'morning', 'evening', 'night', 'afternoon', 'before', 'after',
-            'meal', 'meals', 'food', 'water', 'take', 'tablet', 'tablets',
-            'capsule', 'capsules', 'syrup', 'injection', 'drop', 'drops',
-            'apply', 'use', 'days', 'weeks', 'months', 'sos', 'stat',
-            'medical', 'facility', 'rank', 'degree', 'edition', 'sample',
-            'images', 'copyright', 'researchgate', 'google', 'www',
-        }
+        # 2. OCR.space (free API)
+        text = _text_from_ocrspace(image_path)
+        if text and len(text.strip()) > 10:
+            return text
 
-        # ── Dosage markers that confirm a line has a real medicine ────────────
-        DOSAGE_MARKERS = re.compile(
-            r'\b(\d+\s*(?:mg|mcg|ml|iu|g|gm|units?|tablet|cap|tab|caps))\b',
-            re.IGNORECASE
-        )
-
-        # ── Frequency patterns ────────────────────────────────────────────────
-        FREQ_PATTERN = re.compile(
-            r'(\d+)\s*(?:times?\s*(?:a\s*)?daily|x\s*daily|\/day|OD|BD|TDS|QID)',
-            re.IGNORECASE
-        )
-        FREQ_WORDS = re.compile(
-            r'\b(once|twice|thrice|1|2|3|4)\s*(?:times?\s*(?:a\s*)?)?(?:daily|a\s*day)\b',
-            re.IGNORECASE
-        )
-
-        # ── Duration pattern ──────────────────────────────────────────────────
-        DURATION_PATTERN = re.compile(r'(\d+)\s*days?', re.IGNORECASE)
-
-        # ── Medicine name pattern: starts with capital, has 2+ chars ─────────
-        MED_NAME_PATTERN = re.compile(r'^([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)?)')
-
-        lines = text.split('\n')
-
-        for line in lines:
-            line = line.strip()
-            if len(line) < 4:
-                continue
-
-            # Skip lines whose FIRST word is a known skip word
-            first_word = line.split()[0].lower().rstrip('.:,;')
-            if first_word in SKIP_WORDS:
-                continue
-
-            # Skip lines that are ONLY frequency/time words (no dosage marker)
-            if not DOSAGE_MARKERS.search(line):
-                continue
-
-            # Skip lines that start with a digit (usually dosage lines, not names)
-            if re.match(r'^\d', line):
-                continue
-
-            # Try to extract medicine name from start of line
-            name_match = MED_NAME_PATTERN.match(line)
-            if not name_match:
-                continue
-
-            medicine_name = name_match.group(1).strip()
-
-            # Reject if the name itself is a skip word
-            if medicine_name.lower() in SKIP_WORDS:
-                continue
-
-            # Must be at least 3 chars and not all digits
-            if len(medicine_name) < 3 or medicine_name.isdigit():
-                continue
-
-            # Extract dosage
-            dosage_match = DOSAGE_MARKERS.search(line)
-            dosage = dosage_match.group(1).strip() if dosage_match else '1 tablet'
-
-            # Extract frequency
-            freq = '1'
-            freq_match = FREQ_PATTERN.search(line)
-            if freq_match:
-                freq = freq_match.group(1)
-            else:
-                freq_word_match = FREQ_WORDS.search(line)
-                if freq_word_match:
-                    word = freq_word_match.group(1).lower()
-                    freq = {'once': '1', 'twice': '2', 'thrice': '3',
-                            '1': '1', '2': '2', '3': '3', '4': '4'}.get(word, '1')
-                elif re.search(r'\bBD\b', line, re.IGNORECASE):
-                    freq = '2'
-                elif re.search(r'\bTDS\b', line, re.IGNORECASE):
-                    freq = '3'
-                elif re.search(r'\bQID\b', line, re.IGNORECASE):
-                    freq = '4'
-
-            # Extract duration
-            duration = 7
-            dur_match = DURATION_PATTERN.search(line)
-            if dur_match:
-                d = int(dur_match.group(1))
-                if 1 <= d <= 365:
-                    duration = d
-
-            medicines.append({
-                'name':         medicine_name,
-                'dosage':       dosage,
-                'frequency':    f"{freq} times daily",
-                'duration_days': duration,
-            })
-
-        return medicines
-
-    def extract_duration(self, text):
-        patterns = [
-            r'Duration\s*[:;-]?\s*(\d+)\s*days?',
-            r'for\s*(\d+)\s*days?',
-            r'(\d+)\s*days?',
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                duration = int(match.group(1))
-                if 1 <= duration <= 365:
-                    return duration
-        return 7
+        # 3. Tesseract (local)
+        text = _text_from_tesseract(image_path)
+        return text or ""
 
     def parse_prescription(self, image_path):
-        text = self.extract_text(image_path)
+        """
+        Main entry point — linear fallback, zero recursion.
 
-        if not text:
+        Step 1: Gemini Vision reads image → structured data (handles handwriting)
+        Step 2: Text OCR + regex (fallback for printed prescriptions)
+        """
+
+        # ── Step 1: Gemini Vision ─────────────────────────────────────────────
+        print("   🔮 Trying Gemini Vision (free, reads handwriting)...")
+        gemini_result = _parse_with_gemini_vision(image_path)
+
+        if gemini_result is not None:
+            # Get raw text separately for storage (no recursion)
+            raw_text = self._get_raw_text(image_path)
+
+            medicines = gemini_result['medicines']
+            print(f"   ✅ Final: patient={gemini_result['patient_name']}, "
+                  f"age={gemini_result['age']}, disease={gemini_result['disease']}, "
+                  f"medicines={len(medicines)}, "
+                  f"dur={gemini_result['treatment_duration_days']}d")
+
             return {
-                'success': False,
-                'error': 'Failed to extract text from image'
+                'success':                 True,
+                'extracted_text':          raw_text,
+                'patient_name':            gemini_result['patient_name'],
+                'age':                     gemini_result['age'],
+                'disease':                 gemini_result['disease'],
+                'medicines':               medicines,
+                'treatment_duration_days': gemini_result['treatment_duration_days'],
+                'total_medicines':         len(medicines),
             }
 
-        patient_name = self.extract_patient_name(text)
-        age          = self.extract_age(text)
-        disease      = self.extract_disease(text)
-        medicines    = self.extract_medicines(text)
-        duration     = self.extract_duration(text)
+        # ── Step 2: Text OCR + regex ─────────────────────────────────────────
+        print("   📄 Gemini unavailable — falling back to text OCR + regex...")
+        raw_text = self._get_raw_text(image_path)
+
+        if not raw_text or len(raw_text.strip()) < 5:
+            print("   ⚠️  No text extracted from image.")
+            return {
+                'success':                 True,
+                'extracted_text':          '',
+                'patient_name':            None,
+                'age':                     None,
+                'disease':                 None,
+                'medicines':               [],
+                'treatment_duration_days': 7,
+                'total_medicines':         0,
+            }
+
+        patient_name = _extract_patient_name(raw_text)
+        age          = _extract_age(raw_text)
+        disease      = _extract_disease(raw_text)
+        duration     = _extract_duration(raw_text)
+        medicines    = _extract_medicines_regex(raw_text)
+
+        print(f"   ✅ Final: patient={patient_name}, age={age}, "
+              f"disease={disease}, medicines={len(medicines)}, dur={duration}d")
 
         return {
-            'success':                True,
-            'extracted_text':         text,
-            'patient_name':           patient_name,
-            'age':                    age,
-            'disease':                disease,
-            'medicines':              medicines,
+            'success':                 True,
+            'extracted_text':          raw_text,
+            'patient_name':            patient_name,
+            'age':                     age,
+            'disease':                 disease,
+            'medicines':               medicines,
             'treatment_duration_days': duration,
-            'total_medicines':        len(medicines),
+            'total_medicines':         len(medicines),
         }
+
+    # ── Public compatibility methods ──────────────────────────────────────────
+
+    def extract_text(self, image_path):
+        """Public method — calls internal _get_raw_text, no recursion."""
+        return self._get_raw_text(image_path)
+
+    def extract_patient_name(self, text): return _extract_patient_name(text)
+    def extract_age(self, text):          return _extract_age(text)
+    def extract_disease(self, text):      return _extract_disease(text)
+    def extract_duration(self, text):     return _extract_duration(text)
+    def extract_medicines(self, text):    return _extract_medicines_regex(text)
