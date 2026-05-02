@@ -12,9 +12,8 @@ class PatientLoginScreen extends StatefulWidget {
 
 class _PatientLoginScreenState extends State<PatientLoginScreen> {
   final _phoneController = TextEditingController();
-  final _otpController = TextEditingController();
+  final _otpController   = TextEditingController();
   bool _otpSent = false;
-  String? _otpCode;
 
   @override
   void dispose() {
@@ -27,7 +26,7 @@ class _PatientLoginScreenState extends State<PatientLoginScreen> {
     if (_phoneController.text.trim().length != 10) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Please enter valid 10-digit phone number'),
+          content: Text("Please enter a valid 10-digit phone number"),
           backgroundColor: Colors.red,
         ),
       );
@@ -35,27 +34,23 @@ class _PatientLoginScreenState extends State<PatientLoginScreen> {
     }
 
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final otp = await authProvider.sendPatientOTP(_phoneController.text.trim());
+    final success = await authProvider.sendPatientOTP(_phoneController.text.trim());
 
     if (!mounted) return;
 
-    if (otp != null) {
-      setState(() {
-        _otpSent = true;
-        _otpCode = otp;
-      });
-
+    if (success) {
+      setState(() => _otpSent = true);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('OTP sent: $otp (Demo mode)'),
+        const SnackBar(
+          content: Text("OTP sent to your registered phone number"),
           backgroundColor: Colors.green,
-          duration: const Duration(seconds: 5),
+          duration: Duration(seconds: 3),
         ),
       );
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(authProvider.error ?? 'Failed to send OTP'),
+          content: Text(authProvider.error ?? "Failed to send OTP"),
           backgroundColor: Colors.red,
         ),
       );
@@ -66,7 +61,7 @@ class _PatientLoginScreenState extends State<PatientLoginScreen> {
     if (_otpController.text.trim().length != 6) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Please enter 6-digit OTP'),
+          content: Text("Please enter the 6-digit OTP from your SMS"),
           backgroundColor: Colors.red,
         ),
       );
@@ -89,7 +84,7 @@ class _PatientLoginScreenState extends State<PatientLoginScreen> {
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(authProvider.error ?? 'Invalid OTP'),
+          content: Text(authProvider.error ?? "Invalid or expired OTP"),
           backgroundColor: Colors.red,
         ),
       );
@@ -100,7 +95,7 @@ class _PatientLoginScreenState extends State<PatientLoginScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Patient Login'),
+        title: const Text("Patient Login"),
         backgroundColor: Colors.green,
         foregroundColor: Colors.white,
       ),
@@ -112,28 +107,18 @@ class _PatientLoginScreenState extends State<PatientLoginScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const SizedBox(height: 40),
-                Icon(
-                  Icons.person,
-                  size: 80,
-                  color: Colors.green,
-                ),
+                const Icon(Icons.person, size: 80, color: Colors.green),
                 const SizedBox(height: 24),
                 const Text(
-                  'Welcome, Patient!',
+                  "Welcome, Patient!",
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Login with your phone number',
+                  "Login with your registered phone number",
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.grey.shade600,
-                  ),
+                  style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
                 ),
                 const SizedBox(height: 48),
                 TextFormField(
@@ -142,12 +127,10 @@ class _PatientLoginScreenState extends State<PatientLoginScreen> {
                   maxLength: 10,
                   enabled: !_otpSent,
                   decoration: InputDecoration(
-                    labelText: 'Phone Number',
+                    labelText: "Phone Number",
                     prefixIcon: const Icon(Icons.phone),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    counterText: '',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    counterText: "",
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -158,36 +141,45 @@ class _PatientLoginScreenState extends State<PatientLoginScreen> {
                       backgroundColor: Colors.green,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
                     child: authProvider.isLoading
-                        ? const SizedBox(
-                            height: 20,
-                            width: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Text(
-                            'Send OTP',
-                            style: TextStyle(fontSize: 16),
-                          ),
+                        ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Text("Send OTP", style: TextStyle(fontSize: 16)),
                   ),
                 if (_otpSent) ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.green.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.green.shade200),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.sms, color: Colors.green.shade700, size: 20),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            "OTP sent to +91${_phoneController.text.trim()}. Check your SMS.",
+                            style: TextStyle(color: Colors.green.shade700, fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
                   TextFormField(
                     controller: _otpController,
                     keyboardType: TextInputType.number,
                     maxLength: 6,
+                    autofocus: true,
                     decoration: InputDecoration(
-                      labelText: 'Enter OTP',
+                      labelText: "Enter OTP",
+                      hintText: "6-digit code from SMS",
                       prefixIcon: const Icon(Icons.lock),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      counterText: '',
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      counterText: "",
                     ),
                   ),
                   const SizedBox(height: 16),
@@ -197,63 +189,27 @@ class _PatientLoginScreenState extends State<PatientLoginScreen> {
                       backgroundColor: Colors.green,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
                     child: authProvider.isLoading
-                        ? const SizedBox(
-                            height: 20,
-                            width: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Text(
-                            'Verify OTP',
-                            style: TextStyle(fontSize: 16),
-                          ),
+                        ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Text("Verify OTP", style: TextStyle(fontSize: 16)),
                   ),
-                  const SizedBox(height: 16),
-                  TextButton(
+                  const SizedBox(height: 12),
+                  TextButton.icon(
                     onPressed: () {
                       setState(() {
                         _otpSent = false;
                         _otpController.clear();
                       });
                     },
-                    child: const Text('Change Phone Number'),
+                    icon: const Icon(Icons.arrow_back, size: 16),
+                    label: const Text("Change Phone Number"),
                   ),
-                ],
-                if (_otpCode != null) ...[
-                  const SizedBox(height: 24),
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.green.shade50,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Column(
-                      children: [
-                        Text(
-                          'Demo Mode - OTP Code',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: Colors.green.shade700,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          _otpCode!,
-                          style: TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.green.shade700,
-                          ),
-                        ),
-                      ],
-                    ),
+                  TextButton.icon(
+                    onPressed: authProvider.isLoading ? null : _sendOTP,
+                    icon: const Icon(Icons.refresh, size: 16),
+                    label: const Text("Resend OTP"),
                   ),
                 ],
               ],

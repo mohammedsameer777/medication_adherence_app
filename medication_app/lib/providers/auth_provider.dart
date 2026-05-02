@@ -83,29 +83,28 @@ class AuthProvider with ChangeNotifier {
   }
   
   // Patient Send OTP
-  Future<String?> sendPatientOTP(String phoneNumber) async {
+  Future<bool> sendPatientOTP(String phoneNumber) async {
     _isLoading = true;
     _error = null;
     notifyListeners();
-    
+
     try {
       final response = await _apiService.sendOTP(phoneNumber);
-      
+
       _isLoading = false;
       notifyListeners();
-      
+
       if (response['success']) {
-        // Return OTP code (in production, this would be sent via SMS)
-        return response['data']['otp_code'];
+        return true;
       }
-      
+
       _error = response['message'];
-      return null;
+      return false;
     } catch (e) {
       _error = e.toString();
       _isLoading = false;
       notifyListeners();
-      return null;
+      return false;
     }
   }
   

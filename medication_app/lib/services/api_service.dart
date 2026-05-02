@@ -12,15 +12,16 @@ class ApiService {
 
   String? _token;
 
-  String get _baseUrl {
-    if (kIsWeb) {
-      return AppConstants.baseUrl.replaceFirst('localhost', '127.0.0.1');
-    }
-    return AppConstants.baseUrl;
-  }
+  // FIX: removed redundant _baseUrl getter that duplicated platform logic.
+  // AppConstants.baseUrl is already platform-aware (Android emulator / iOS /
+  // web / desktop). Using it directly avoids the old bug where the emulator
+  // still got the physical device IP.
+  String get _baseUrl => AppConstants.baseUrl;
+
+  // ── Token management ───────────────────────────────────────────────────────
 
   Future<Map<String, String>> _getHeaders({bool includeAuth = true}) async {
-    Map<String, String> headers = {'Content-Type': 'application/json'};
+    final Map<String, String> headers = {'Content-Type': 'application/json'};
     if (includeAuth) {
       await getToken();
       if (_token != null) {
@@ -62,17 +63,19 @@ class ApiService {
     print('🗑️ Token cleared');
   }
 
+  // ── HTTP verbs ─────────────────────────────────────────────────────────────
+
   Future<Map<String, dynamic>> get(String endpoint) async {
     try {
-      final headers = await _getHeaders();
-      final url     = '$_baseUrl$endpoint';
+      final headers  = await _getHeaders();
+      final url      = '$_baseUrl$endpoint';
       print('📡 GET $url');
       final response = await http.get(Uri.parse(url), headers: headers);
       print('📥 Response status: ${response.statusCode}');
       return _handleResponse(response);
     } catch (e) {
       print('❌ GET Error: $e');
-      throw Exception('Network error: $e');
+      rethrow;
     }
   }
 
@@ -82,8 +85,8 @@ class ApiService {
     bool includeAuth = true,
   }) async {
     try {
-      final headers = await _getHeaders(includeAuth: includeAuth);
-      final url     = '$_baseUrl$endpoint';
+      final headers  = await _getHeaders(includeAuth: includeAuth);
+      final url      = '$_baseUrl$endpoint';
       print('📡 POST $url');
       print('📤 Data: ${json.encode(data)}');
       final response = await http.post(
@@ -96,14 +99,14 @@ class ApiService {
       return _handleResponse(response);
     } catch (e) {
       print('❌ POST Error: $e');
-      throw Exception('Network error: $e');
+      rethrow;
     }
   }
 
   Future<Map<String, dynamic>> delete(String endpoint) async {
     try {
-      final headers = await _getHeaders();
-      final url     = '$_baseUrl$endpoint';
+      final headers  = await _getHeaders();
+      final url      = '$_baseUrl$endpoint';
       print('📡 DELETE $url');
       final response = await http.delete(Uri.parse(url), headers: headers);
       print('📥 Response status: ${response.statusCode}');
@@ -113,7 +116,7 @@ class ApiService {
       return _handleResponse(response);
     } catch (e) {
       print('❌ DELETE Error: $e');
-      throw Exception('Network error: $e');
+      rethrow;
     }
   }
 
@@ -125,7 +128,7 @@ class ApiService {
     try {
       await getToken();
       final url     = '$_baseUrl$endpoint';
-      var   request = http.MultipartRequest('POST', Uri.parse(url));
+      final request = http.MultipartRequest('POST', Uri.parse(url));
       if (_token != null) {
         request.headers['Authorization'] = 'Bearer $_token';
       }
@@ -137,36 +140,49 @@ class ApiService {
           request.fields[key] = value.toString();
         });
       }
-      var streamedResponse = await request.send();
-      var response         = await http.Response.fromStream(streamedResponse);
+      final streamedResponse = await request.send();
+      final response         = await http.Response.fromStream(streamedResponse);
       return _handleResponse(response);
     } catch (e) {
-      throw Exception('Upload error: $e');
+      print('❌ Upload Error: $e');
+      rethrow;
     }
   }
 
+  // FIX: _handleResponse no longer swallows the real Django error body.
+  // The inner catch now re-throws the original exception instead of a
+  // generic status-code message, so debug logs show the actual error.
   Map<String, dynamic> _handleResponse(http.Response response) {
     print('Response code: ${response.statusCode}');
     print('Response body: ${response.body}');
+
     if (response.statusCode >= 200 && response.statusCode < 300) {
-      return json.decode(response.body);
-    } else if (response.statusCode == 401) {
-      throw Exception('Session expired. Please login again.');
-    } else if (response.statusCode == 403) {
-      throw Exception('Authentication failed. Please login again.');
-    } else {
-      try {
-        final error = json.decode(response.body);
-        throw Exception(
-            error['message'] ?? error['detail'] ?? 'Request failed');
-      } catch (_) {
-        throw Exception(
-            'Request failed with status ${response.statusCode}');
-      }
+      return json.decode(response.body) as Map<String, dynamic>;
     }
+
+    // Try to parse a structured error from Django
+    String errorMessage;
+    try {
+      final error = json.decode(response.body) as Map<String, dynamic>;
+      errorMessage = (error['message'] ?? error['detail'] ?? '').toString();
+      if (errorMessage.isEmpty) errorMessage = response.body;
+    } catch (_) {
+      // Body is not JSON — use raw body so we can see the real Django error
+      errorMessage = response.body.isNotEmpty
+          ? response.body
+          : 'Request failed with status ${response.statusCode}';
+    }
+
+    if (response.statusCode == 401) {
+      throw Exception('Session expired. Please login again.');
+    }
+    if (response.statusCode == 403) {
+      throw Exception('Access denied: $errorMessage');
+    }
+    throw Exception(errorMessage);
   }
 
-  // ── Auth APIs ─────────────────────────────────────────────────────────────
+  // ── Auth APIs ──────────────────────────────────────────────────────────────
 
   Future<Map<String, dynamic>> loginDoctor(
       String username, String password) async {
@@ -175,16 +191,32 @@ class ApiService {
       {'username': username, 'password': password},
       includeAuth: false,
     );
+
     if (response['success'] == true && response['data'] != null) {
-      final token = response['data']['tokens']['access'];
+      final data   = response['data'] as Map<String, dynamic>;
+      final token  = data['tokens']['access'] as String;
+      final doctor = data['doctor'] as Map<String, dynamic>;
+
       await setToken(token);
+
+      // FIX: save userId and userType so every screen can read them
+      // from SharedPreferences without another API call.
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(AppConstants.keyUserType, 'doctor');
+      await prefs.setString(
+          AppConstants.keyUserId, doctor['id'].toString());
+      await prefs.setString(
+          AppConstants.keyUserData, json.encode(doctor));
     }
     return response;
   }
 
   Future<Map<String, dynamic>> sendOTP(String phoneNumber) async {
-    return await post(AppConstants.sendOTP, {'phone_number': phoneNumber},
-        includeAuth: false);
+    return await post(
+      AppConstants.sendOTP,
+      {'phone_number': phoneNumber},
+      includeAuth: false,
+    );
   }
 
   Future<Map<String, dynamic>> verifyOTP(
@@ -194,9 +226,22 @@ class ApiService {
       {'phone_number': phoneNumber, 'otp_code': otpCode},
       includeAuth: false,
     );
+
     if (response['success'] == true && response['data'] != null) {
-      final token = response['data']['tokens']['access'];
+      final data    = response['data'] as Map<String, dynamic>;
+      final token   = data['tokens']['access'] as String;
+      final patient = data['patient'] as Map<String, dynamic>;
+
       await setToken(token);
+
+      // FIX: save patient userId and userType — without this every screen
+      // that reads keyUserId from SharedPreferences gets null and crashes.
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(AppConstants.keyUserType, 'patient');
+      await prefs.setString(
+          AppConstants.keyUserId, patient['id'].toString());
+      await prefs.setString(
+          AppConstants.keyUserData, json.encode(patient));
     }
     return response;
   }
@@ -205,7 +250,7 @@ class ApiService {
     return await get(AppConstants.getCurrentUser);
   }
 
-  // ── Doctor APIs ───────────────────────────────────────────────────────────
+  // ── Doctor APIs ────────────────────────────────────────────────────────────
 
   Future<Map<String, dynamic>> getDoctorPatients() async {
     return await get(AppConstants.getDoctorPatients);
@@ -220,22 +265,56 @@ class ApiService {
     return await delete('/auth/patient/$patientId/delete/');
   }
 
-  // ── Prescription APIs ─────────────────────────────────────────────────────
+  // ── Prescription APIs ──────────────────────────────────────────────────────
 
+  /// Upload prescription image, then automatically:
+  ///   1. Schedule SMS reminders (uses prescription_id from upload response)
+  ///   2. Run adherence prediction
+  ///
+  /// FIX: previously upload succeeded but neither reminders nor prediction
+  /// were ever triggered — the full pipeline now runs in one call.
   Future<Map<String, dynamic>> uploadPrescription(
       File image, int patientId, int doctorId) async {
-    return await uploadFile(
+    // Step 1 — upload image + OCR
+    final uploadResponse = await uploadFile(
       AppConstants.uploadPrescription,
       image,
       additionalData: {'patient': patientId, 'doctor': doctorId},
     );
+
+    if (uploadResponse['success'] != true) {
+      return uploadResponse;
+    }
+
+    final prescriptionId =
+        uploadResponse['data']?['prescription_id'] as int?;
+
+    if (prescriptionId != null) {
+      // Step 2 — schedule SMS reminders (non-fatal if it fails)
+      try {
+        await scheduleReminders(prescriptionId);
+        print('📅 Reminders scheduled for prescription #$prescriptionId');
+      } catch (e) {
+        print('⚠️ scheduleReminders failed (non-fatal): $e');
+      }
+
+      // Step 3 — run adherence prediction (non-fatal if it fails)
+      try {
+        await predictAdherence(patientId, prescriptionId);
+        print('🤖 Adherence prediction run for prescription #$prescriptionId');
+      } catch (e) {
+        print('⚠️ predictAdherence failed (non-fatal): $e');
+      }
+    }
+
+    return uploadResponse;
   }
 
   Future<Map<String, dynamic>> getPatientPrescriptions(int patientId) async {
     return await get('${AppConstants.getPatientPrescriptions}$patientId/');
   }
 
-  // ── Prediction APIs ───────────────────────────────────────────────────────
+  // ── Prediction APIs ────────────────────────────────────────────────────────
 
   Future<Map<String, dynamic>> predictAdherence(
       int patientId, int prescriptionId) async {
@@ -264,29 +343,33 @@ class ApiService {
     return await post('/predictions/predict-smart/', featureData);
   }
 
-  // ── Notification APIs ─────────────────────────────────────────────────────
+  // ── Notification APIs ──────────────────────────────────────────────────────
 
   Future<Map<String, dynamic>> scheduleReminders(int prescriptionId) async {
     return await post(
-        '${AppConstants.scheduleReminders}$prescriptionId/schedule/', {});
+      '${AppConstants.scheduleReminders}$prescriptionId/schedule/',
+      {},
+    );
   }
 
   Future<Map<String, dynamic>> getPatientReminders(int patientId) async {
     return await get(
-        '${AppConstants.getPatientReminders}$patientId/reminders/?filter=today');
+      '${AppConstants.getPatientReminders}$patientId/reminders/?filter=today',
+    );
   }
 
   Future<Map<String, dynamic>> getPatientRemindersFiltered(
       int patientId, String filter) async {
     return await get(
-        '${AppConstants.getPatientReminders}$patientId/reminders/?filter=$filter');
+      '${AppConstants.getPatientReminders}$patientId/reminders/?filter=$filter',
+    );
   }
 
   Future<Map<String, dynamic>> markReminderTaken(int reminderId) async {
     return await post('/notifications/reminder/$reminderId/taken/', {});
   }
 
-  // ── Patient Monitoring API (NEW) ──────────────────────────────────────────
+  // ── Patient Monitoring API ─────────────────────────────────────────────────
 
   Future<Map<String, dynamic>> getPatientMonitoring(int patientId) async {
     return await get('/auth/patient/$patientId/monitoring/');
