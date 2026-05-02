@@ -70,14 +70,21 @@ class PatientOTPSendSerializer(serializers.Serializer):
         return value
     
     def create_otp(self):
+        from notifications.sms_service import sms_service
+
         phone_number = self.validated_data['phone_number']
-        
+
         # Delete old OTPs for this phone number
         OTP.objects.filter(phone_number=phone_number).delete()
-        
+
         # Create new OTP
         otp = OTP.objects.create(phone_number=phone_number)
-        
+
+        # Send OTP via SMS (Twilio)
+        sent = sms_service.send_otp_sms(phone_number, otp.otp_code)
+        if not sent:
+            print(f'⚠️  OTP SMS failed for {phone_number} — OTP: {otp.otp_code}')
+
         return otp
 
 

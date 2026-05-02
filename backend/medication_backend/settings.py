@@ -5,11 +5,12 @@ Django settings for medication_backend project.
 from pathlib import Path
 from datetime import timedelta
 import os
+import sys
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = 'django-insecure-your-secret-key-change-in-production'
-DEBUG      = True
+SECRET_KEY    = 'django-insecure-your-secret-key-change-in-production'
+DEBUG         = True
 ALLOWED_HOSTS = ['*']
 
 INSTALLED_APPS = [
@@ -80,14 +81,18 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 LANGUAGE_CODE = 'en-us'
-TIME_ZONE     = 'Asia/Kolkata'
-USE_I18N      = True
-USE_TZ        = True
+# FIX: Keep TIME_ZONE as IST for display. USE_TZ=True means Django stores UTC
+# internally but converts to IST for display. Celery is also set to IST below.
+TIME_ZONE = 'Asia/Kolkata'
+USE_I18N  = True
+USE_TZ    = True
 
-STATIC_URL  = 'static/'
+STATIC_URL  = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
-MEDIA_URL   = 'media/'
-MEDIA_ROOT  = BASE_DIR / 'media'
+
+# FIX: MEDIA_URL must have a leading slash so image URLs resolve correctly
+MEDIA_URL  = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
@@ -101,13 +106,15 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME':  timedelta(days=7),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
-    'ROTATE_REFRESH_TOKENS':  False,
+    'ACCESS_TOKEN_LIFETIME':    timedelta(days=7),
+    'REFRESH_TOKEN_LIFETIME':   timedelta(days=30),
+    'ROTATE_REFRESH_TOKENS':    False,
     'BLACKLIST_AFTER_ROTATION': True,
-    'ALGORITHM':       'HS256',
-    'SIGNING_KEY':     SECRET_KEY,
-    'AUTH_HEADER_TYPES': ('Bearer',),
+    'ALGORITHM':                'HS256',
+    'SIGNING_KEY':              SECRET_KEY,
+    'AUTH_HEADER_TYPES':        ('Bearer',),
+    # FIX: Update patient.last_login on every token issue
+    'UPDATE_LAST_LOGIN':        True,
 }
 
 CORS_ALLOWED_ORIGINS = [
@@ -117,22 +124,41 @@ CORS_ALLOWED_ORIGINS = [
 CORS_ALLOW_ALL_ORIGINS = True
 
 # ── Tesseract OCR (local fallback) ─────────────────────────────────────────
-TESSERACT_CMD = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# FIX: Auto-detect platform instead of hardcoding Windows path.
+# On Linux/Mac, tesseract is on $PATH so no explicit cmd is needed.
+# On Windows, fall back to the default installation path.
+if sys.platform == 'win32':
+    TESSERACT_CMD = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+else:
+    # On Linux/Mac tesseract is on PATH — pytesseract finds it automatically.
+    # Set to 'tesseract' so ocr_service.py can assign it without crashing.
+    TESSERACT_CMD = 'tesseract'
 
 # ── Twilio SMS ─────────────────────────────────────────────────────────────
 USE_TWILIO          = True
-TWILIO_ACCOUNT_SID  = 'AC4c7a1c839c7e5390b02f84d2afcf9064'
-TWILIO_AUTH_TOKEN   = 'e6a61cd2d01fca383f8496619b78a9d0'
-TWILIO_PHONE_NUMBER = '+12605445856'
+TWILIO_ACCOUNT_SID  = 'AC9edaf1133030283210aac23d6169d970'
+TWILIO_AUTH_TOKEN   = '1617f9c4f131419182e6f99aeb11987d'
+TWILIO_PHONE_NUMBER = '+14137281674'
 
 # ── Celery + Redis ─────────────────────────────────────────────────────────
-CELERY_BROKER_URL         = 'redis://127.0.0.1:6379/0'
-CELERY_RESULT_BACKEND     = 'django-db'
-CELERY_ACCEPT_CONTENT     = ['json']
-CELERY_TASK_SERIALIZER    = 'json'
-CELERY_RESULT_SERIALIZER  = 'json'
-CELERY_TIMEZONE           = 'Asia/Kolkata'
-CELERY_ENABLE_UTC         = True
+CELERY_BROKER_URL        = 'redis://127.0.0.1:6379/0'
+CELERY_RESULT_BACKEND    = 'django-db'
+CELERY_ACCEPT_CONTENT    = ['json']
+CELERY_TASK_SERIALIZER   = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+
+# FIX: CELERY_ENABLE_UTC=True with CELERY_TIMEZONE='Asia/Kolkata' caused a
+# 5.5-hour offset — Celery stored scheduled_time in UTC but compared using IST,
+# so reminders fired 5.5 hours late (or never within the 2-minute window).
+# Solution: disable UTC mode so Celery works entirely in IST, matching Django's
+# USE_TZ=True behaviour where timezone.now() returns UTC-aware datetimes that
+# Django automatically converts to IST for display.
+CELERY_TIMEZONE   = 'Asia/Kolkata'
+CELERY_ENABLE_UTC = False
+
+# FIX: Explicit scheduler backend — prevents Beat from using an incompatible
+# in-memory scheduler when django_celery_beat is installed.
+CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 
 CELERY_BEAT_SCHEDULE = {
     'send-due-reminders-every-minute': {

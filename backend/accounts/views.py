@@ -64,10 +64,9 @@ def patient_send_otp(request):
         otp = serializer.create_otp()
         return Response({
             'success': True,
-            'message': 'OTP sent successfully',
+            'message': 'OTP sent to registered phone number',
             'data': {
                 'phone_number': otp.phone_number,
-                'otp_code':     otp.otp_code,
                 'expires_at':   otp.expires_at
             }
         }, status=status.HTTP_200_OK)
@@ -257,4 +256,4 @@ def delete_patient(request, patient_id):
     return Response(
         {'success': True, 'message': f'Patient "{patient_name}" deleted successfully.'},
         status=status.HTTP_200_OK,
-    )    
+    )
