@@ -1,34 +1,8 @@
 // lib/config/constants.dart
 
-import 'dart:io' show Platform;
-import 'package:flutter/foundation.dart' show kIsWeb;
-
 class AppConstants {
-  // ── Your PC's LAN IP ───────────────────────────────────────────────────────
-  static const String _physicalDeviceIp = '192.168.1.13';
-
-  static const int _port = 8000;
-
-  // ── Set to false for physical device, true for emulator ───────────────────
-  static const bool _useEmulator = false;
-
-  // ── Base URL (platform-aware) ──────────────────────────────────────────────
-  static String get baseUrl {
-    if (kIsWeb) {
-      return 'http://127.0.0.1:$_port/api';
-    }
-    if (Platform.isAndroid) {
-      return _useEmulator
-          ? 'http://10.0.2.2:$_port/api'
-          : 'http://$_physicalDeviceIp:$_port/api';
-    }
-    if (Platform.isIOS) {
-      return _useEmulator
-          ? 'http://127.0.0.1:$_port/api'
-          : 'http://$_physicalDeviceIp:$_port/api';
-    }
-    return 'http://127.0.0.1:$_port/api';
-  }
+  // ── Production URL (Render) ────────────────────────────────────────────────
+  static const String baseUrl = 'https://medication-adherence-app.onrender.com/api';
 
   // ── Auth endpoints ─────────────────────────────────────────────────────────
   static const String loginDoctor    = '/auth/doctor/login/';
