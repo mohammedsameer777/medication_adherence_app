@@ -9,6 +9,7 @@ Priority:
 
 Add to settings.py:
   GEMINI_API_KEY    = "AIza..."   # aistudio.google.com (free, no credit card)
+  GEMINI_MODEL      = "gemini-1.5-flash-latest"  # optional, default shown
   OCR_SPACE_API_KEY = "..."       # ocr.space (25k free/month)
 
 BUG FIX: Removed recursive call — extract_text() was calling itself.
@@ -54,7 +55,18 @@ except ImportError:
 # ─────────────────────────────────────────────────────────────────────────────
 # GEMINI VISION — FREE, reads handwriting perfectly
 # Get key at: https://aistudio.google.com (no credit card)
+# Model is configurable via settings.GEMINI_MODEL or GEMINI_MODEL env var
+# Default: gemini-1.5-flash-latest
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _get_gemini_model():
+    """Return the Gemini model name from settings/env, defaulting to gemini-1.5-flash-latest."""
+    return (
+        getattr(settings, 'GEMINI_MODEL', None)
+        or os.environ.get('GEMINI_MODEL')
+        or 'gemini-1.5-flash-latest'
+    )
+
 
 def _parse_with_gemini_vision(image_path):
     api_key = getattr(settings, 'GEMINI_API_KEY', None) or os.environ.get('GEMINI_API_KEY')
@@ -112,8 +124,11 @@ Rules:
             "generationConfig": {"temperature": 0.1, "maxOutputTokens": 1024}
         }).encode('utf-8')
 
-        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-               f"gemini-1.5-flash:generateContent?key={api_key}")
+        model = _get_gemini_model()
+        url   = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+                 f"{model}:generateContent?key={api_key}")
+
+        print(f"   🔮 Using Gemini model: {model}")
 
         req = urllib.request.Request(
             url, data=payload,
