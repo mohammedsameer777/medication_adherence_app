@@ -1,17 +1,14 @@
 """
 OCR SERVICE — Gemini Vision primary parser
-Gemini 1.5 Flash reads prescription images directly (free, handles handwriting).
+Gemini 2.5 Flash reads prescription images directly (free, handles handwriting).
 
 Priority:
   1. Gemini Vision  — reads image directly, free tier, handles handwriting + typed
   2. OCR.space      — free text OCR fallback (25k/month)
   3. Tesseract      — local fallback
 
-Add to settings.py:
-  GEMINI_API_KEY    = "AIzaSyCIgrW_A7jG_3XtnIYuQFXE6g_bonVYT2U"
-  OCR_SPACE_API_KEY = "..."       # ocr.space (25k free/month) — optional
-
-IMPORTANT: Never hardcode API keys in source files. Always use settings.py or env vars.
+Add to Render Environment Variables:
+  GEMINI_API_KEY = "AIzaSyAGDJD-eyp87fZRDf1JbteurbUF_9AABPw"
 """
 
 import re
@@ -53,26 +50,25 @@ except ImportError:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GEMINI VISION — FREE, reads handwriting perfectly
-# Get key at: https://aistudio.google.com (no credit card)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _parse_with_gemini_vision(image_path):
-    # Pull key from settings.py first, then environment variable
     api_key = getattr(settings, 'GEMINI_API_KEY', None) or os.environ.get('GEMINI_API_KEY')
     if not api_key:
         print("   ⚠️  GEMINI_API_KEY not set.")
-        print("       Add to settings.py:  GEMINI_API_KEY = 'AIza...'")
-        print("       Or set env var:       export GEMINI_API_KEY='AIza...'")
+        print("       Add in Render → Environment → GEMINI_API_KEY")
         return None
 
     try:
         with open(image_path, 'rb') as f:
             image_data = base64.b64encode(f.read()).decode('utf-8')
 
-        ext       = os.path.splitext(image_path)[1].lower()
-        mime_map  = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-                     '.png': 'image/png',  '.bmp':  'image/bmp',
-                     '.tiff': 'image/tiff', '.tif': 'image/tiff'}
+        ext      = os.path.splitext(image_path)[1].lower()
+        mime_map = {
+            '.jpg':  'image/jpeg', '.jpeg': 'image/jpeg',
+            '.png':  'image/png',  '.bmp':  'image/bmp',
+            '.tiff': 'image/tiff', '.tif':  'image/tiff',
+        }
         mime_type = mime_map.get(ext, 'image/jpeg')
 
         prompt = """You are a medical prescription parser. Read this prescription carefully.
@@ -115,13 +111,11 @@ Rules:
             "generationConfig": {"temperature": 0.1, "maxOutputTokens": 1024}
         }).encode('utf-8')
 
-        # Try models in order — gemini-2.0-flash first, then 1.5-flash as fallback
+        # Models available with this key — best first
         models_to_try = [
-            ('v1',    'gemini-2.0-flash'),
-            ('v1',    'gemini-1.5-flash'),
-            ('v1beta','gemini-2.0-flash'),
-            ('v1beta','gemini-1.5-flash'),
-            ('v1beta','gemini-1.5-pro'),
+            ('v1', 'gemini-2.5-flash'),
+            ('v1', 'gemini-2.0-flash'),
+            ('v1', 'gemini-2.0-flash-001'),
         ]
 
         raw_text_response = None
@@ -142,15 +136,10 @@ Rules:
             except urllib.error.HTTPError as he:
                 err_body = he.read().decode()[:200]
                 print(f"   ❌ {model_name} ({api_ver}): HTTP {he.code} — {err_body[:100]}")
-                if he.code == 400:
-                    # Bad request — likely model not available, try next
-                    continue
                 if he.code == 403:
-                    print("   ⚠️  API key may be invalid or this model isn't enabled.")
-                    continue
-                if he.code == 429:
-                    print("   ℹ️  Rate limit hit (free tier: 15 req/min). Trying next model...")
-                    continue
+                    print("   ⚠️  403 — check GEMINI_API_KEY in Render Environment.")
+                elif he.code == 429:
+                    print("   ℹ️  Rate limit (free tier: 15 req/min). Trying next model...")
                 continue
             except urllib.error.URLError as ue:
                 print(f"   ❌ {model_name} network error: {ue.reason}")
@@ -160,14 +149,14 @@ Rules:
                 continue
 
         if raw_text_response is None:
-            print("   ❌ All Gemini models failed. Check your API key and network.")
+            print("   ❌ All Gemini models failed.")
             return None
 
-        # Parse the JSON response
+        # Parse response
         data     = json.loads(raw_text_response)
         raw_text = data['candidates'][0]['content']['parts'][0]['text'].strip()
 
-        # Strip markdown code fences if Gemini wrapped the JSON
+        # Strip markdown code fences if present
         raw_text = re.sub(r'^```(?:json)?\s*', '', raw_text)
         raw_text = re.sub(r'\s*```$', '', raw_text).strip()
 
@@ -188,8 +177,12 @@ Rules:
             except (ValueError, TypeError):
                 dur = 7
             dosage = str(m.get('dosage', '1 tablet')).strip() or '1 tablet'
-            medicines.append({'name': name, 'dosage': dosage,
-                              'frequency': freq, 'duration_days': dur})
+            medicines.append({
+                'name':          name,
+                'dosage':        dosage,
+                'frequency':     freq,
+                'duration_days': dur,
+            })
             print(f"   💊 Gemini: {name} | {dosage} | {freq} | {dur}d")
 
         age = result.get('age')
@@ -220,7 +213,6 @@ Rules:
         return None
     except json.JSONDecodeError as e:
         print(f"   ❌ Gemini JSON parse error: {e}")
-        print(f"       Raw response was: {raw_text_response[:300] if raw_text_response else 'None'}")
         return None
     except Exception as e:
         print(f"   ❌ Gemini error: {type(e).__name__}: {e}")
@@ -232,7 +224,6 @@ Rules:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _text_from_google_vision(image_path, gv_client):
-    """Extract text using Google Cloud Vision client."""
     try:
         with open(image_path, 'rb') as f:
             content = f.read()
@@ -250,22 +241,27 @@ def _text_from_google_vision(image_path, gv_client):
 
 
 def _text_from_ocrspace(image_path):
-    """Extract text using OCR.space free API."""
     api_key = getattr(settings, 'OCR_SPACE_API_KEY', None) or os.environ.get('OCR_SPACE_API_KEY')
     if not api_key:
         return ""
     try:
         with open(image_path, 'rb') as f:
             image_data = base64.b64encode(f.read()).decode('utf-8')
-        ext       = os.path.splitext(image_path)[1].lower()
-        mime_map  = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-                     '.png': 'image/png',  '.bmp':  'image/bmp'}
+        ext      = os.path.splitext(image_path)[1].lower()
+        mime_map = {
+            '.jpg':  'image/jpeg', '.jpeg': 'image/jpeg',
+            '.png':  'image/png',  '.bmp':  'image/bmp',
+        }
         mime_type = mime_map.get(ext, 'image/jpeg')
         payload   = urllib.parse.urlencode({
-            'base64Image': f"data:{mime_type};base64,{image_data}",
-            'apikey': api_key, 'language': 'eng',
-            'isOverlayRequired': 'false', 'detectOrientation': 'true',
-            'scale': 'true', 'OCREngine': '2', 'isTable': 'true',
+            'base64Image':       f"data:{mime_type};base64,{image_data}",
+            'apikey':            api_key,
+            'language':          'eng',
+            'isOverlayRequired': 'false',
+            'detectOrientation': 'true',
+            'scale':             'true',
+            'OCREngine':         '2',
+            'isTable':           'true',
         }).encode('utf-8')
         req = urllib.request.Request(
             'https://api.ocr.space/parse/image', data=payload,
@@ -289,7 +285,6 @@ def _text_from_ocrspace(image_path):
 
 
 def _text_from_tesseract(image_path):
-    """Extract text using local Tesseract."""
     if not TESSERACT_AVAILABLE:
         return ""
     try:
@@ -313,7 +308,7 @@ def _text_from_tesseract(image_path):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FIELD EXTRACTORS from text
+# FIELD EXTRACTORS from raw text
 # ─────────────────────────────────────────────────────────────────────────────
 
 NON_MEDICINE = {
@@ -339,8 +334,9 @@ def _extract_patient_name(text):
         m = re.search(pattern, text, re.IGNORECASE)
         if m:
             name = re.sub(r'\s+', ' ', m.group(1).strip())
-            name = re.split(r'\b(age|date|phone|address|mr|mrs|dr|sex|gender)\b',
-                            name, flags=re.IGNORECASE)[0].strip()
+            name = re.split(
+                r'\b(age|date|phone|address|mr|mrs|dr|sex|gender)\b',
+                name, flags=re.IGNORECASE)[0].strip()
             if 3 <= len(name) <= 50:
                 return name
     return None
@@ -408,7 +404,8 @@ def _extract_medicines_regex(text):
         r'\b(\d+(?:\.\d+)?\s*(?:mg|mcg|ml|iu|g|gm|units?|tablet|tab|cap|caps))\b',
         re.IGNORECASE)
     TIMING_RE = re.compile(r'(\d)\s*[-–]\s*(\d)\s*[-–]\s*(\d)')
-    FREQ_RE   = re.compile(r'(\d+)\s*(?:times?\s*(?:a\s*)?daily|x\s*daily|\/day)', re.IGNORECASE)
+    FREQ_RE   = re.compile(
+        r'(\d+)\s*(?:times?\s*(?:a\s*)?daily|x\s*daily|\/day)', re.IGNORECASE)
     ABBREV_RE = re.compile(r'\b(OD|BD|TDS|QID)\b', re.IGNORECASE)
     DUR_RE    = re.compile(r'(\d+)\s*days?', re.IGNORECASE)
     PREFIX_RE = re.compile(
@@ -425,7 +422,8 @@ def _extract_medicines_regex(text):
                 return str(total)
         ab = ABBREV_RE.search(line)
         if ab:
-            return {'OD': '1', 'BD': '2', 'TDS': '3', 'QID': '4'}.get(ab.group(1).upper(), '1')
+            return {'OD': '1', 'BD': '2', 'TDS': '3', 'QID': '4'}.get(
+                ab.group(1).upper(), '1')
         fm = FREQ_RE.search(line)
         if fm:
             return fm.group(1)
@@ -472,8 +470,9 @@ def _extract_medicines_regex(text):
         if not pm:
             continue
         s1_lines.add(i)
-        nm = re.match(r'^([A-Za-z][A-Za-z0-9\-]{1,30}(?:\s+[A-Za-z][A-Za-z0-9\-]{1,20})?)',
-                      line[pm.end():])
+        nm = re.match(
+            r'^([A-Za-z][A-Za-z0-9\-]{1,30}(?:\s+[A-Za-z][A-Za-z0-9\-]{1,20})?)',
+            line[pm.end():])
         if nm:
             add(nm.group(1), line)
 
@@ -519,7 +518,8 @@ class PrescriptionOCR:
         try:
             creds_path = getattr(settings, 'GOOGLE_CLOUD_VISION_CREDENTIALS', None)
             if creds_path and os.path.exists(str(creds_path)):
-                credentials = service_account.Credentials.from_service_account_file(str(creds_path))
+                credentials = service_account.Credentials.from_service_account_file(
+                    str(creds_path))
                 self._gv_client = vision.ImageAnnotatorClient(credentials=credentials)
                 print("✅ Google Cloud Vision: service account.")
             else:
@@ -546,10 +546,9 @@ class PrescriptionOCR:
 
     def parse_prescription(self, image_path):
         """
-        Main entry point — linear fallback, zero recursion.
-
-        Step 1: Gemini Vision reads image → structured data (handles handwriting)
-        Step 2: Text OCR + regex (fallback for printed prescriptions)
+        Main entry point.
+        Step 1: Gemini Vision (handles handwriting perfectly)
+        Step 2: Text OCR + regex fallback (for printed prescriptions)
         """
 
         # ── Step 1: Gemini Vision ─────────────────────────────────────────────
@@ -574,7 +573,7 @@ class PrescriptionOCR:
                 'total_medicines':         len(medicines),
             }
 
-        # ── Step 2: Text OCR + regex ─────────────────────────────────────────
+        # ── Step 2: Text OCR + regex ──────────────────────────────────────────
         print("   📄 Gemini unavailable — falling back to text OCR + regex...")
         raw_text = self._get_raw_text(image_path)
 
@@ -614,7 +613,6 @@ class PrescriptionOCR:
     # ── Public compatibility methods ──────────────────────────────────────────
 
     def extract_text(self, image_path):
-        """Public method — calls internal _get_raw_text."""
         return self._get_raw_text(image_path)
 
     def extract_patient_name(self, text): return _extract_patient_name(text)
