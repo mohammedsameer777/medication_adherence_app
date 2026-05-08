@@ -8,10 +8,10 @@ Priority:
   3. Tesseract      — local fallback
 
 Add to settings.py:
-  GEMINI_API_KEY    = "AIza..."   # aistudio.google.com (free, no credit card)
-  OCR_SPACE_API_KEY = "..."       # ocr.space (25k free/month)
+  GEMINI_API_KEY    = "AIzaSyCIgrW_A7jG_3XtnIYuQFXE6g_bonVYT2U"
+  OCR_SPACE_API_KEY = "..."       # ocr.space (25k free/month) — optional
 
-BUG FIX: Removed recursive call — extract_text() was calling itself.
+IMPORTANT: Never hardcode API keys in source files. Always use settings.py or env vars.
 """
 
 import re
@@ -57,9 +57,12 @@ except ImportError:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _parse_with_gemini_vision(image_path):
+    # Pull key from settings.py first, then environment variable
     api_key = getattr(settings, 'GEMINI_API_KEY', None) or os.environ.get('GEMINI_API_KEY')
     if not api_key:
-        print("   ⚠️  GEMINI_API_KEY not set. Get free key at: https://aistudio.google.com")
+        print("   ⚠️  GEMINI_API_KEY not set.")
+        print("       Add to settings.py:  GEMINI_API_KEY = 'AIza...'")
+        print("       Or set env var:       export GEMINI_API_KEY='AIza...'")
         return None
 
     try:
@@ -112,7 +115,7 @@ Rules:
             "generationConfig": {"temperature": 0.1, "maxOutputTokens": 1024}
         }).encode('utf-8')
 
-        # Try v1 first, then v1beta — try gemini-2.0-flash first, fallback to 1.5-flash
+        # Try models in order — gemini-2.0-flash first, then 1.5-flash as fallback
         models_to_try = [
             ('v1',    'gemini-2.0-flash'),
             ('v1',    'gemini-1.5-flash'),
@@ -126,102 +129,106 @@ Rules:
             url = (f"https://generativelanguage.googleapis.com/{api_ver}/models/"
                    f"{model_name}:generateContent?key={api_key}")
             print(f"   🔮 Trying {model_name} ({api_ver})...")
-            try_req = urllib.request.Request(
+            req = urllib.request.Request(
                 url, data=payload,
                 headers={"Content-Type": "application/json"},
                 method="POST"
             )
             try:
-                with urllib.request.urlopen(try_req, timeout=30) as try_resp:
-                    raw_text_response = try_resp.read().decode("utf-8")
-                    print(f"   ✅ {model_name} works!")
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    raw_text_response = resp.read().decode("utf-8")
+                    print(f"   ✅ {model_name} responded successfully!")
                     break
             except urllib.error.HTTPError as he:
-                err_body = he.read().decode()[:100]
-                print(f"   ❌ {model_name} ({api_ver}): {he.code} — {err_body[:60]}")
+                err_body = he.read().decode()[:200]
+                print(f"   ❌ {model_name} ({api_ver}): HTTP {he.code} — {err_body[:100]}")
+                if he.code == 400:
+                    # Bad request — likely model not available, try next
+                    continue
+                if he.code == 403:
+                    print("   ⚠️  API key may be invalid or this model isn't enabled.")
+                    continue
+                if he.code == 429:
+                    print("   ℹ️  Rate limit hit (free tier: 15 req/min). Trying next model...")
+                    continue
+                continue
+            except urllib.error.URLError as ue:
+                print(f"   ❌ {model_name} network error: {ue.reason}")
                 continue
             except Exception as ex:
-                print(f"   ❌ {model_name} ({api_ver}): {ex}")
+                print(f"   ❌ {model_name} unexpected error: {ex}")
                 continue
 
         if raw_text_response is None:
-            print("   ❌ All Gemini models failed")
+            print("   ❌ All Gemini models failed. Check your API key and network.")
             return None
 
-        url = "done"  # placeholder so existing code below doesn't error
-
-        req = urllib.request.Request(
-            url, data=payload,
-            headers={'Content-Type': 'application/json'},
-            method='POST'
-        )
-
+        # Parse the JSON response
         data     = json.loads(raw_text_response)
-        if True:  # keep indentation
-            raw_text = data['candidates'][0]['content']['parts'][0]['text'].strip()
-            raw_text = re.sub(r'^```(?:json)?\s*', '', raw_text)
-            raw_text = re.sub(r'\s*```$', '', raw_text).strip()
+        raw_text = data['candidates'][0]['content']['parts'][0]['text'].strip()
 
-            result = json.loads(raw_text)
+        # Strip markdown code fences if Gemini wrapped the JSON
+        raw_text = re.sub(r'^```(?:json)?\s*', '', raw_text)
+        raw_text = re.sub(r'\s*```$', '', raw_text).strip()
 
-            medicines = []
-            for m in result.get('medicines', []):
-                if not isinstance(m, dict) or not m.get('name'):
-                    continue
-                name = str(m['name']).strip()
-                if len(name) < 2:
-                    continue
-                freq_raw   = str(m.get('frequency', '1 times daily'))
-                freq_match = re.search(r'(\d+)', freq_raw)
-                freq       = f"{freq_match.group(1)} times daily" if freq_match else "1 times daily"
-                try:
-                    dur = max(1, min(int(m.get('duration_days', 7)), 365))
-                except (ValueError, TypeError):
-                    dur = 7
-                dosage = str(m.get('dosage', '1 tablet')).strip() or '1 tablet'
-                medicines.append({'name': name, 'dosage': dosage,
-                                  'frequency': freq, 'duration_days': dur})
-                print(f"   🔮 Gemini: {name} | {dosage} | {freq} | {dur}d")
+        result = json.loads(raw_text)
 
-            age = result.get('age')
+        medicines = []
+        for m in result.get('medicines', []):
+            if not isinstance(m, dict) or not m.get('name'):
+                continue
+            name = str(m['name']).strip()
+            if len(name) < 2:
+                continue
+            freq_raw   = str(m.get('frequency', '1 times daily'))
+            freq_match = re.search(r'(\d+)', freq_raw)
+            freq       = f"{freq_match.group(1)} times daily" if freq_match else "1 times daily"
             try:
-                age = int(age)
-                if not (1 <= age <= 120):
-                    age = None
+                dur = max(1, min(int(m.get('duration_days', 7)), 365))
             except (ValueError, TypeError):
+                dur = 7
+            dosage = str(m.get('dosage', '1 tablet')).strip() or '1 tablet'
+            medicines.append({'name': name, 'dosage': dosage,
+                              'frequency': freq, 'duration_days': dur})
+            print(f"   💊 Gemini: {name} | {dosage} | {freq} | {dur}d")
+
+        age = result.get('age')
+        try:
+            age = int(age)
+            if not (1 <= age <= 120):
                 age = None
+        except (ValueError, TypeError):
+            age = None
 
-            try:
-                duration = max(1, min(int(result.get('treatment_duration_days', 7)), 365))
-            except (ValueError, TypeError):
-                duration = 7
+        try:
+            duration = max(1, min(int(result.get('treatment_duration_days', 7)), 365))
+        except (ValueError, TypeError):
+            duration = 7
 
-            print(f"   ✅ Gemini done: {len(medicines)} medicines found")
-            return {
-                'patient_name':            result.get('patient_name'),
-                'age':                     age,
-                'disease':                 result.get('disease'),
-                'medicines':               medicines,
-                'treatment_duration_days': duration,
-            }
+        print(f"   ✅ Gemini done: {len(medicines)} medicines found")
+        return {
+            'patient_name':            result.get('patient_name'),
+            'age':                     age,
+            'disease':                 result.get('disease'),
+            'medicines':               medicines,
+            'treatment_duration_days': duration,
+        }
 
     except urllib.error.HTTPError as e:
         body = e.read().decode()[:300]
         print(f"   ❌ Gemini HTTP error {e.code}: {body}")
-        if e.code == 429:
-            print("   ℹ️  Rate limit — free tier is 15 req/min. Falling back.")
         return None
     except json.JSONDecodeError as e:
         print(f"   ❌ Gemini JSON parse error: {e}")
+        print(f"       Raw response was: {raw_text_response[:300] if raw_text_response else 'None'}")
         return None
     except Exception as e:
-        print(f"   ❌ Gemini error: {e}")
+        print(f"   ❌ Gemini error: {type(e).__name__}: {e}")
         return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TEXT EXTRACTION helpers (Google Vision / OCR.space / Tesseract)
-# These only extract raw text — no recursion possible
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _text_from_google_vision(image_path, gv_client):
@@ -287,7 +294,6 @@ def _text_from_tesseract(image_path):
         return ""
     try:
         if USE_OPENCV:
-            import numpy as np
             img      = cv2.imread(image_path)
             gray     = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             thresh   = cv2.adaptiveThreshold(
@@ -498,7 +504,7 @@ def _extract_medicines_regex(text):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Main OCR class — NO RECURSION
+# Main OCR class
 # ─────────────────────────────────────────────────────────────────────────────
 
 class PrescriptionOCR:
@@ -524,23 +530,17 @@ class PrescriptionOCR:
             print(f"⚠️  Google Cloud Vision init failed: {e}")
 
     def _get_raw_text(self, image_path):
-        """
-        Get raw text from image using available text-only OCR backends.
-        This method does NOT call itself — no recursion possible.
-        """
-        # 1. Google Cloud Vision (if configured)
+        """Get raw text from image using available text-only OCR backends."""
         if self._gv_client is not None:
             text = _text_from_google_vision(image_path, self._gv_client)
             if text and len(text.strip()) > 10:
                 print(f"   ✅ Google Vision text: {len(text)} chars.")
                 return text
 
-        # 2. OCR.space (free API)
         text = _text_from_ocrspace(image_path)
         if text and len(text.strip()) > 10:
             return text
 
-        # 3. Tesseract (local)
         text = _text_from_tesseract(image_path)
         return text or ""
 
@@ -557,15 +557,12 @@ class PrescriptionOCR:
         gemini_result = _parse_with_gemini_vision(image_path)
 
         if gemini_result is not None:
-            # Get raw text separately for storage (no recursion)
-            raw_text = self._get_raw_text(image_path)
-
+            raw_text  = self._get_raw_text(image_path)
             medicines = gemini_result['medicines']
             print(f"   ✅ Final: patient={gemini_result['patient_name']}, "
                   f"age={gemini_result['age']}, disease={gemini_result['disease']}, "
                   f"medicines={len(medicines)}, "
                   f"dur={gemini_result['treatment_duration_days']}d")
-
             return {
                 'success':                 True,
                 'extracted_text':          raw_text,
@@ -617,7 +614,7 @@ class PrescriptionOCR:
     # ── Public compatibility methods ──────────────────────────────────────────
 
     def extract_text(self, image_path):
-        """Public method — calls internal _get_raw_text, no recursion."""
+        """Public method — calls internal _get_raw_text."""
         return self._get_raw_text(image_path)
 
     def extract_patient_name(self, text): return _extract_patient_name(text)
