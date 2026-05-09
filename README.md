@@ -1,960 +1,362 @@
-# 💊 Medication Adherence App
+💊 Medication Adherence App
+Full-Stack AI-Powered Prescription & Adherence Monitoring System
+Django REST API  •  Flutter App  •  XGBoost ML  •  Gemini Vision OCR  •  Twilio SMS
+Django 4	Flutter	XGBoost	Gemini AI	Twilio SMS	Redis+Celery
 
-A full-stack mobile application that uses Machine Learning to predict medication non-adherence risk, automate SMS reminders, and enable doctors to monitor patient compliance — built with **Django REST Framework**, **Flutter**, and **Scikit-learn**.
 
----
+📖 Project Overview
+The Medication Adherence App is a full-stack healthcare system designed to help doctors manage patients, upload prescriptions, and predict medication adherence risk using machine learning. It consists of a Django REST Framework backend and a Flutter mobile/web frontend.
+The core idea: when a doctor uploads a prescription image, the system uses AI (Google Gemini 1.5 Flash) to read and extract medicine details automatically. Then it runs an XGBoost model to predict whether the patient is at low, medium, or high risk of not adhering to their medication schedule — and sends automated SMS reminders via Twilio.
 
-## Table of Contents
+🏗️ System Architecture
+High-Level Flow
+Doctor Login → Upload Prescription Image → Gemini Vision OCR → Extract Medicines → Run XGBoost Prediction → SMS Reminders via Twilio → Patient Dashboard
 
-1. [Overview](#overview)
-2. [System Architecture](#system-architecture)
-3. [Tech Stack](#tech-stack)
-4. [Project Structure](#project-structure)
-5. [Django Apps & Models](#django-apps--models)
-6. [Machine Learning Pipeline](#machine-learning-pipeline)
-7. [OCR Pipeline](#ocr-pipeline)
-8. [SMS Notification Service](#sms-notification-service)
-9. [Authentication System](#authentication-system)
-10. [API Reference](#api-reference)
-11. [Flutter Frontend](#flutter-frontend)
-12. [Configuration & Settings](#configuration--settings)
-13. [Getting Started](#getting-started)
-14. [Demo Credentials](#demo-credentials)
-15. [Known Issues & Fixes Applied](#known-issues--fixes-applied)
+Layer	Technology	Purpose
+Frontend	Flutter (Dart) + Provider	Doctor & Patient mobile/web UI
+Backend API	Django REST Framework + JWT	REST API, auth, business logic
+Database	SQLite (dev) / PostgreSQL (prod)	All data storage
+OCR Engine	Google Gemini 1.5 Flash (primary)	Reads handwritten + printed prescriptions
+OCR Fallback 1	OCR.space API (free, 25k/month)	Text-based OCR fallback
+OCR Fallback 2	Tesseract + OpenCV (local)	Fully offline fallback
+ML Model	XGBoost (89.42% accuracy)	Adherence risk prediction
+Task Queue	Celery + Redis	Scheduled SMS reminders
+SMS Service	Twilio	Medication reminder SMS
+Auth	JWT (SimpleJWT) + OTP (SMS)	Doctor JWT, Patient OTP login
 
----
+📦 Backend Django Apps
+The backend is organized into 4 Django apps:
+1. accounts
+•	Models:  Doctor registration and JWT-based login
+•	 Patient management linked to a doctor
+•	 OTP-based authentication for patients (6-digit, 10-minute expiry)
+•	 Phone number-based patient identity
+2. prescriptions
+•	 Upload prescription image (JPG/PNG)
+•	 Process with PrescriptionOCR class (3-tier fallback)
+•	 Store extracted medicines, dosage, frequency, disease, patient name, age
+•	 AwarenessMessage model for disease-specific health tips
+3. predictions
+•	 Full ML pipeline: data loading, feature engineering, RFE, SMOTE, training, saving
+•	 AdherencePrediction model stores every prediction with risk level and recommendation
+•	 MLModel registry tracks all trained models and their metrics
+•	 Two prediction endpoints: prescription-based and smart form-based
+4. notifications
+•	 SMSReminder model stores scheduled reminder records
+•	 Celery Beat polls every 60 seconds for due reminders
+•	 Twilio SMS sent at scheduled time (mock mode available for dev)
 
-## Overview
+🔍 OCR Pipeline — How Prescription Reading Works
+The OCR is implemented in backend/prescriptions/ocr_service.py as the PrescriptionOCR class. It has a strict 3-tier fallback strategy with zero recursion:
+Tier 1 — Google Gemini 1.5 Flash (Primary)
+The prescription image is base64-encoded and sent directly to the Gemini Vision API with a structured prompt. Gemini returns a JSON object with patient name, age, disease, treatment duration, and a list of medicines (name, dosage, frequency, duration_days).
+Why Gemini? It handles handwritten prescriptions, mixed handwritten/printed text, and Tamil/regional scripts better than traditional OCR. Free tier allows 1,500 requests/day.
+Gemini Prompt Strategy
+You are a medical prescription parser.
+Return ONLY a JSON object with:
+  patient_name, age, disease,
+  treatment_duration_days,
+  medicines: [ { name, dosage, frequency, duration_days } ]
+Rules:
+  - T. or Tab. prefix = tablet
+  - frequency = "N times daily"
+  - Return [] if no medicines found
+Tier 2 — OCR.space API (Text OCR Fallback)
+If Gemini is unavailable or rate-limited, the image is sent to OCR.space (free API, 25,000 requests/month). This returns plain text. The system then applies regex extractors to parse patient name, age, disease, duration, and medicines from the raw text.
+Tier 3 — Tesseract + OpenCV (Offline Fallback)
+If both cloud APIs are unavailable, Tesseract runs locally. OpenCV pre-processes the image: grayscale conversion → adaptive thresholding → fast non-local means denoising → Tesseract PSM 6 OCR. Regex extractors then parse the output same as Tier 2.
+Regex Extraction (Tiers 2 & 3)
+After raw text is obtained, these extractors run:
+•	Patient name: matches 'Patient Name:', 'Name:', 'Patient:' patterns
+•	Age: matches 'Age:', 'N years', 'N/M' (age/gender) patterns
+•	Disease: matches 'Diagnosis:', 'Dx:', 'C/O:', common disease keywords
+•	Duration: matches 'for N days', 'Duration: N days'
+•	Medicines: matches Tab./T./Syp./Cap. prefixes, timing patterns (1-0-1), OD/BD/TDS/QID abbreviations, tabular layouts
 
-Around 50% of patients with chronic diseases do not take their medications as prescribed, leading to poor health outcomes and avoidable hospitalizations. This app tackles that gap by:
+🤖 Machine Learning — Adherence Prediction
+Algorithm: XGBoost (Forced as Primary Model)
+Algorithm: XGBoost Classifier (eXtreme Gradient Boosting). Trained alongside Random Forest, Gradient Boosting, MLP Neural Network, LightGBM, KNN, and Logistic Regression — but XGBoost is always selected as the deployed model regardless of leaderboard position.
+Dataset
+Property	Value
+Source	Kaggle: patient_adherence_dataset.csv
+Base records	~5,000 real patient records
+Augmentation	3x duplication with 3% Gaussian noise on numeric columns
+Final training size	~15,000 records
+Target classes	Low risk, Medium risk, High risk
+Random seed	42 (reproducible)
+Feature Engineering (13 → 34 Features)
+Starting from 13 original input features, 21 additional features are engineered:
+Original 13 Input Features
+Feature	Description
+Age	Patient age (integer)
+gender_encoded	0=Female, 1=Male
+medication_type_encoded	Encoded medication category
+dosage_normalized	Dosage normalized 0–1
+Previous_Adherence	0=non-adherent history, 1=adherent
+education_encoded	Education level (0–2)
+income_normalized	Income normalized 0–1
+social_support_encoded	Social support level (0–2)
+severity_encoded	Disease severity (0=low, 1=med, 2=high)
+Comorbidities_Count	Number of additional conditions
+healthcare_access_encoded	Access to healthcare (0–2)
+mental_health_encoded	Mental health status (0–2)
+Insurance_Coverage	0=no insurance, 1=insured
 
-- Predicting adherence risk (**Low / Medium / High**) using an ML pipeline trained on 5,002 real patient records from Kaggle
-- Sending automated **SMS reminders** via Twilio (with a mock/console mode for development)
-- Allowing doctors to **upload prescription images** that are processed with Tesseract OCR to extract patient and medicine data automatically
-- Providing a **Flutter mobile app** for both doctors (dashboard, smart predictions, feature importance) and patients (OTP login, reminders, awareness messages)
+21 Engineered Features
+Engineered Feature	Formula / Logic
+vulnerability_score	(Age/100)*0.4 + (severity/2)*0.6
+support_gap	(1-social_support/2) * (comorbidities/max)
+adherence_capacity	income*0.35 + education*0.35 + access*0.30
+stress_index	(1-mental/max) * (1-income)
+dosage_burden	dosage_normalized * (Age/100)
+history_support	Previous_Adherence * (social_support/2)
+comorbidity_severity	Comorbidities_Count * (severity+1)
+risk_composite	Weighted sum of non-adherence risk factors
+adherence_risk_score	Weighted sum of protective factors
+barrier_index	Weighted sum of adherence barriers
+protective_score	Weighted combination of protective factors
+combined_risk	risk_composite * (1 - protective_score)
+net_risk_score	barrier_index - protective_score
+income_x_adherence	income_normalized * Previous_Adherence
+severity_x_comorbid	severity * comorbidities (interaction)
+access_x_support	healthcare_access * social_support
+dosage_x_severity	dosage * severity (interaction)
+age_x_comorbid	(Age/100) * comorbidities
+mental_x_income	mental_health * income
+prev_adh_x_severity	Previous_Adherence * (1 - severity/2)
+insurance_x_income	Insurance_Coverage * income_normalized
+Feature Selection — RFE (Recursive Feature Elimination)
+After engineering 34 features, RFE with a Random Forest estimator (300 trees) is used to select the top 20 most informative features. This reduces overfitting and improves generalization.
+•	All 34 features are first scored using a Random Forest for importance ranking
+•	RFE then iteratively removes the least important features until 20 remain
+•	The selected 20 features are saved to ml_models/feature_names.pkl
+•	RFE selector itself is saved to ml_models/rfe_selector.pkl for inference
+Class Imbalance Handling — SMOTE
+SMOTE (Synthetic Minority Oversampling TEchnique) from imbalanced-learn is applied after RFE to balance the three risk classes before training. It generates synthetic samples for minority classes rather than simply duplicating them.
+Preprocessing
+•	StandardScaler normalizes all 20 selected features before training and inference
+•	Scaler saved to ml_models/scaler.pkl — same scaler used at prediction time
+•	80/20 train-test split with stratification on the risk classes
+•	5-fold Stratified Cross-Validation for F1 score evaluation
+XGBoost Hyperparameters
+XGBoost Configuration
+n_estimators    = 500
+learning_rate   = 0.05
+max_depth       = 6
+subsample       = 0.8
+colsample_bytree= 0.8
+reg_alpha       = 0.1   (L1 regularization)
+reg_lambda      = 1.0   (L2 regularization)
+min_child_weight= 5
+eval_metric     = mlogloss
+random_state    = 42
+Model Performance
+Model	Accuracy	Precision	Recall	F1	CV F1
+XGBoost 🏆	89.42%	~89%	~89%	~89%	~89%
+LightGBM	~88%	~88%	~88%	~88%	~88%
+Random Forest	~86%	~86%	~86%	~86%	~86%
+Gradient Boosting	~85%	~85%	~85%	~85%	~85%
+MLP Neural Net	~83%	~83%	~83%	~83%	~83%
+KNN	~78%	~78%	~78%	~78%	~78%
+Logistic Regression	~72%	~72%	~72%	~72%	~72%
+Prediction Output
+Given 13 input features, the model outputs:
+•	risk_level: 'low', 'medium', or 'high'
+•	adherence_score: float 0–1 (computed from class probabilities)
+•	adherence_percentage: score * 100
+•	confidence: probability of predicted class
+•	risk_probabilities: {low: 0.xx, medium: 0.xx, high: 0.xx}
+•	recommendation: actionable text advice based on risk level + age + medicines
 
----
+📱 SMS Notification System
+Medication reminders are sent via Twilio SMS. The system uses Celery Beat for scheduled task execution.
+Flow
+•	Doctor uploads prescription → medicines are saved with dosage and frequency
+•	SMSReminder records are created with a scheduled_time for each dose
+•	Celery Beat task (send_due_reminders) runs every 60 seconds
+•	Task queries reminders with status='scheduled' and scheduled_time within last 2 minutes
+•	Twilio client sends SMS with medicine name, dosage, frequency, and timing
+•	Reminder status updated to 'sent' with Twilio SID stored for tracking
+Mock Mode
+Setting USE_TWILIO=False in settings runs in mock mode — SMS content is printed to console. Useful for development without Twilio credentials.
 
-## System Architecture
+📲 Flutter Frontend
+Architecture
+The Flutter app uses the Provider package for state management and a singleton ApiService for all HTTP calls. JWT tokens are stored in SharedPreferences.
+Screens
+Screen	Description
+SplashScreen	App entry — checks stored token, routes to login
+DoctorLoginScreen	Email + password JWT login for doctors
+DoctorDashboard	Patient list, prescription upload, summary stats
+PatientMonitoringScreen	Per-patient adherence history, risk timeline
+SmartPredictionScreen	Manual 13-feature form → ML prediction result
+FeatureImportanceScreen	Bar chart of all 34 feature importances (fl_chart)
+PatientLoginScreen	Phone number + OTP-based login for patients
+PatientDashboard	Patient's own prescriptions, medicines, reminders
+Key Flutter Packages
+Package	Use
+http / dio	REST API calls
+provider	State management
+shared_preferences	JWT token storage
+image_picker	Prescription photo selection from camera/gallery
+fl_chart	Feature importance bar charts
+flutter_spinkit	Loading animations
+intl	Date and time formatting
+permission_handler	Camera and storage permissions
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│                   Flutter Frontend (Dart)                     │
-│   Doctor: Dashboard · Smart Prediction · Feature Importance   │
-│   Patient: OTP Login · Prescriptions · Reminders              │
-│   State: Provider  |  HTTP: http + dio  |  Storage: SharedPrefs│
-└───────────────────────────┬──────────────────────────────────┘
-                            │ REST API (JWT Bearer Token)
-┌───────────────────────────▼──────────────────────────────────┐
-│              Django REST Framework  (Port 8000)               │
-│                                                               │
-│  ┌───────────┐  ┌──────────────┐  ┌────────────────────────┐ │
-│  │ accounts  │  │ prescriptions│  │      predictions       │ │
-│  │           │  │              │  │                        │ │
-│  │ Doctor    │  │ Prescription │  │ AdherencePrediction    │ │
-│  │ Patient   │  │ Medicine     │  │ MLModel                │ │
-│  │ OTP       │  │ AwarenessMsg │  │ ml_service.py          │ │
-│  └───────────┘  │ ocr_service  │  │ data_loader.py         │ │
-│                 └──────────────┘  └────────────────────────┘ │
-│                                                               │
-│  ┌──────────────────────────────────────────────────────────┐ │
-│  │                    notifications                          │ │
-│  │  SMSReminder · PushNotification · sms_service.py         │ │
-│  └──────────────────────────────────────────────────────────┘ │
-└───────┬───────────────┬──────────────────┬────────────────────┘
-        │               │                  │
-   SQLite DB       Twilio SMS        ml_models/ (pkl files)
-   (db.sqlite3)   (or mock mode)    random_forest_model.pkl
-                                    scaler.pkl
-                                    label_encoders.pkl
-                                    feature_names.pkl
-                                    feature_importances.pkl
-```
+🔗 REST API Endpoints
+Auth — /api/auth/
+Method	Endpoint	Description
+POST	/doctor/login/	Doctor login, returns JWT access+refresh tokens
+POST	/doctor/register/	Register new doctor account
+POST	/patient/send-otp/	Send 6-digit OTP to patient phone (via Twilio)
+POST	/patient/verify-otp/	Verify OTP and return JWT token
+POST	/patient/register/	Register patient linked to doctor
+GET	/user/me/	Get current authenticated user details
+GET	/doctor/patients/	List all patients under logged-in doctor
+GET	/patient/<id>/monitoring/	Full monitoring data for a patient
+DELETE	/patient/<id>/delete/	Delete a patient record
 
----
+Prescriptions — /api/prescriptions/
+Method	Endpoint	Description
+POST	/upload/	Upload prescription image → triggers OCR pipeline
+GET	/<id>/	Get single prescription + extracted medicines
+GET	/patient/<id>/	All prescriptions for a patient
+GET	/doctor/	All prescriptions uploaded by logged-in doctor
+GET	/awareness/<disease>/	Awareness messages for a disease type
+POST	/awareness/create/	Create new disease awareness message
 
-## Tech Stack
+Predictions — /api/predictions/
+Method	Endpoint	Description
+POST	/predict/	Predict adherence from uploaded prescription data
+POST	/predict-smart/	Predict from manual 13-feature form input
+GET	/patient/<id>/	All predictions for a patient
+GET	/high-risk/	All high-risk patient predictions
+GET	/stats/	Prediction statistics (count by risk level)
+GET	/features/	Selected features + importance rankings
+GET	/models/all/	List all trained ML models
+POST	/models/train/	Trigger full model retraining pipeline
 
-| Layer | Technology | Version |
-|-------|-----------|---------|
-| Backend framework | Django + Django REST Framework | 4.2 |
-| Auth | `djangorestframework-simplejwt` | JWT (7-day access, 30-day refresh) |
-| Database | SQLite | (PostgreSQL/MySQL ready) |
-| ML | Scikit-learn, XGBoost, Pandas, NumPy | — |
-| OCR | Tesseract + OpenCV (cv2) + PIL | — |
-| SMS | Twilio (with mock fallback) | — |
-| CORS | `django-cors-headers` | — |
-| Frontend | Flutter | SDK ≥ 3.0 |
-| State management | Provider | ^6.1.1 |
-| HTTP client | `http` + `dio` | ^1.1.0 / ^5.4.0 |
-| Charts | `fl_chart` | ^0.66.0 |
-| Local storage | `shared_preferences` | ^2.2.2 |
-| Image picker | `image_picker` | ^1.0.7 |
-| Timezone | Asia/Kolkata | set in settings.py |
+🔐 Authentication
+Doctor Authentication (JWT)
+•	Doctors register with email, password, phone, specialization, hospital, registration number
+•	Login returns a JWT access token (7-day expiry) and refresh token (30-day expiry)
+•	All API calls include Authorization: Bearer <token> header
+•	Algorithm: HS256, signed with Django SECRET_KEY
+Patient Authentication (OTP)
+•	Patients have no password — they authenticate with their phone number + SMS OTP
+•	OTP is 6 digits, expires in 10 minutes
+•	After OTP verification, a JWT token is returned for subsequent API calls
+•	OTP is sent via Twilio SMS to the patient's registered phone
 
----
-
-## Project Structure
-
-```
+📁 Project Structure
+Directory Layout
 medication_adherence_app/
-│
-├── backend/
-│   ├── accounts/                  # Doctor & patient auth, OTP
-│   │   ├── models.py              # Doctor, Patient, OTP models
-│   │   ├── views.py               # Login, register, OTP views
-│   │   ├── serializers.py
-│   │   └── urls.py
-│   │
-│   ├── prescriptions/             # Prescription upload & OCR
-│   │   ├── models.py              # Prescription, Medicine, AwarenessMessage
-│   │   ├── ocr_service.py         # Tesseract + OpenCV OCR pipeline
-│   │   ├── views.py
-│   │   ├── serializers.py
-│   │   └── urls.py
-│   │
-│   ├── predictions/               # ML training & inference
-│   │   ├── ml_service.py          # AdherencePredictor class (core ML)
-│   │   ├── data_loader.py         # DatasetLoader class (Kaggle CSV)
-│   │   ├── models.py              # AdherencePrediction, MLModel
-│   │   ├── views.py               # Predict, train, stats, features
-│   │   ├── serializers.py
-│   │   └── urls.py
-│   │
-│   ├── notifications/             # SMS reminders & push notifications
-│   │   ├── sms_service.py         # SMSReminderService (Twilio/mock)
-│   │   ├── models.py              # SMSReminder, PushNotification
-│   │   ├── views.py
-│   │   └── urls.py
-│   │
-│   ├── medication_backend/        # Django project config
-│   │   ├── settings.py
-│   │   └── urls.py
-│   │
-│   ├── datasets/
-│   │   └── patient_adherence_dataset.csv   # 5,002 Kaggle records
-│   │
-│   ├── ml_models/                 # Auto-generated after training
-│   │   ├── random_forest_model.pkl
-│   │   ├── scaler.pkl
-│   │   ├── label_encoders.pkl
-│   │   ├── feature_names.pkl
-│   │   ├── feature_importances.pkl
-│   │   └── dataset_info.pkl
-│   │
-│   └── manage.py
-│
-├── medication_app/                # Flutter application
-│   └── lib/
-│       ├── config/constants.dart  # API base URL & all endpoint constants
-│       ├── main.dart
-│       ├── providers/
-│       │   └── auth_provider.dart
-│       ├── screens/
-│       │   ├── splash_screen.dart
-│       │   ├── doctor/
-│       │   │   ├── doctor_login_screen.dart
-│       │   │   ├── doctor_dashboard.dart
-│       │   │   ├── smart_prediction_screen.dart
-│       │   │   └── feature_importance_screen.dart
-│       │   └── patient/
-│       │       ├── patient_login_screen.dart
-│       │       └── patient_dashboard.dart
-│       └── services/
-│           └── api_service.dart   # Singleton HTTP client
-│
-├── requirements.txt
-└── .gitignore
-```
-
----
-
-## Django Apps & Models
-
-### `accounts` app
-
-**Doctor**
-```
-db_table: doctors
-Fields: user (OneToOne → Django User), full_name, phone_number (unique),
-        specialization, hospital_name, registration_number (unique),
-        created_at, updated_at, is_active
-```
-
-**Patient**
-```
-db_table: patients
-Fields: doctor (FK → Doctor), full_name, phone_number (unique), age,
-        gender (male/female/other), disease_type,
-        is_verified, last_login, created_at, updated_at, is_active
-```
-
-**OTP**
-```
-db_table: otp_codes
-Fields: phone_number, otp_code (6-digit, auto-generated on save),
-        created_at, is_verified,
-        expires_at (auto = now + 10 minutes)
-Method: is_valid() → returns True if not expired AND not already used
-```
-
----
-
-### `prescriptions` app
-
-**Prescription**
-```
-db_table: prescriptions
-Fields: patient (FK), doctor (FK),
-        prescription_image (ImageField → media/prescriptions/),
-        extracted_text, patient_name_extracted, age_extracted, disease_extracted,
-        treatment_duration_days, total_medicines,
-        is_processed, ocr_status (pending/processing/completed/failed),
-        created_at, updated_at
-```
-
-**Medicine**
-```
-db_table: medicines
-Fields: prescription (FK, related_name='medicines'),
-        medicine_name, dosage, frequency, timing, duration_days,
-        morning, afternoon, evening, night (BooleanFields),
-        total_doses_per_day, created_at
-```
-
-**AwarenessMessage**
-```
-db_table: awareness_messages
-Fields: disease_type, message_title, message_content,
-        message_type (tip/warning/info/reminder), is_active, created_at
-```
-
----
-
-### `predictions` app
-
-**AdherencePrediction**
-```
-db_table: adherence_predictions
-Fields: patient (FK),
-        prescription (FK, null=True — supports prescription-free smart predictions),
-        age, num_medicines, total_doses_per_day, treatment_duration_days, disease_type,
-        adherence_score (Float 0.0-1.0), risk_level (low/medium/high),
-        model_used, model_accuracy, recommendation (Text), created_at
-```
-
-**MLModel**
-```
-db_table: ml_models
-Fields: model_name, model_type (logistic/random_forest/svm/xgboost/deep_learning),
-        accuracy, precision, recall, f1_score,
-        model_file_path, is_active, training_date, notes
-```
-
----
-
-### `notifications` app
-
-**SMSReminder**
-```
-db_table: sms_reminders
-Fields: patient (FK), medicine (FK), phone_number, message_content,
-        scheduled_time, sent_time,
-        status (scheduled/sent/failed/cancelled),
-        twilio_sid, error_message, created_at
-```
-
-**PushNotification**
-```
-db_table: push_notifications
-Fields: patient (FK), title, message,
-        notification_type (medicine/awareness/appointment/general),
-        is_read, sent_at
-```
-
----
-
-## Machine Learning Pipeline
-
-### Dataset
-
-- **Source:** Kaggle — `patient_adherence_dataset.csv`
-- **Records:** 5,002 patients
-- **Location:** `backend/datasets/patient_adherence_dataset.csv`
-
-### All 13 Raw Features
-
-| Feature | Type | Encoding |
-|---------|------|----------|
-| Age | Numeric | Used as-is |
-| Gender | Categorical | Male=0, Female=1, Other=2 → `gender_encoded` |
-| Medication_Type | Categorical | TypeA=0, TypeB=1, TypeC=2 → `medication_type_encoded` |
-| Dosage_mg | Numeric | Min-max normalised → `dosage_normalized` |
-| Previous_Adherence | Binary | 0 = poor history, 1 = good history |
-| Education_Level | Ordinal | High School=0, Graduate=1, Postgraduate=2 → `education_encoded` |
-| Income | Numeric | Min-max normalised → `income_normalized` |
-| Social_Support_Level | Ordinal | Low=0, Medium=1, High=2 → `social_support_encoded` |
-| Condition_Severity | Ordinal | Mild=0, Moderate=1, Severe=2 → `severity_encoded` |
-| Comorbidities_Count | Numeric | Used as-is |
-| Healthcare_Access | Ordinal | Poor=0, Average=1, Good=2 → `healthcare_access_encoded` |
-| Mental_Health_Status | Ordinal | Poor=0, Moderate=1, Good=2 → `mental_health_encoded` |
-| Insurance_Coverage | Binary | 0 = no insurance, 1 = insured |
-
-### Target Variable: `adherence_risk`
-
-The dataset's binary `Adherence` column (0/1) is converted to a **3-class risk score** using a weighted multi-factor formula in `DatasetLoader._convert_adherence_to_risk()`:
-
-```
-risk_score =
-    (Adherence == 0)          × 0.30   ← current non-adherence
-  + (Previous_Adherence == 0) × 0.20   ← past non-adherence
-  + (Comorbidities_Count ≥ 3) × 0.15   ← complex regimen
-  + Condition_Severity_risk   × 0.15   ← Mild→0, Moderate→0.5, Severe→1
-  + Healthcare_Access_risk    × 0.10   ← Good→0, Average→0.5, Poor→1
-  + Mental_Health_risk        × 0.10   ← Good→0, Moderate→0.5, Poor→1
-
-Binned:  [0.00, 0.33] → 'low'
-         (0.33, 0.66] → 'medium'
-         (0.66, 1.00] → 'high'
-```
-
-### Feature Selection (Automatic)
-
-Before training, a **preliminary Random Forest** runs on all 13 features to score importance. The **top 7 features** are selected automatically and used for all downstream models:
-
-```python
-selector_rf = RandomForestClassifier(
-    n_estimators=200, max_depth=10, random_state=42,
-    n_jobs=-1, class_weight='balanced'
-)
-selector_rf.fit(X_all_13_features, y)
-# → top 7 by feature_importances_ are selected
-```
-
-Selected features are then scaled with **`StandardScaler`** before being passed to all models (especially important for Logistic Regression and SVM).
-
-### Models Trained
-
-All 4 models are trained on an **80/20 stratified train/test split** and evaluated with **5-fold Stratified Cross-Validation** (cv_f1_mean ± std is reported for each):
-
-**Logistic Regression**
-```python
-LogisticRegression(
-    max_iter=2000, random_state=42,
-    class_weight='balanced', C=0.5, solver='lbfgs'
-)
-```
-
-**Random Forest**
-```python
-RandomForestClassifier(
-    n_estimators=500, max_depth=12,
-    min_samples_split=4, min_samples_leaf=2,
-    max_features='sqrt', random_state=42,
-    class_weight='balanced', n_jobs=-1,
-    bootstrap=True, oob_score=True   # OOB score reported
-)
-```
-
-**Gradient Boosting**
-```python
-GradientBoostingClassifier(
-    n_estimators=300, learning_rate=0.05,
-    max_depth=5, min_samples_split=4,
-    subsample=0.8, random_state=42
-)
-```
-
-**XGBoost**
-```python
-xgb.XGBClassifier(
-    n_estimators=300, learning_rate=0.05,
-    max_depth=6, subsample=0.8, colsample_bytree=0.8,
-    random_state=42, eval_metric='mlogloss', n_jobs=-1
-)
-```
-
-### Voting Ensemble
-
-After individual training, a **soft-voting ensemble** is built from the **top 3 sklearn models** ranked by cross-validated F1 (XGBoost excluded — sklearn VotingClassifier API incompatibility):
-
-```python
-VotingClassifier(
-    estimators=[(name, model) for top 3 sklearn models],
-    voting='soft',
-    n_jobs=-1
-)
-```
-
-### Model Selection
-
-The **best model by weighted F1-score** across all 5 candidates (4 individual + ensemble) is auto-selected and saved as the production model.
-
-### Per-Model Metrics Reported During Training
-
-For every model, the following are printed and saved to `MLModel` DB:
-- Accuracy, Precision (weighted), Recall (weighted), F1-Score (weighted)
-- CV F1 mean ± std (5-fold)
-- OOB Score (Random Forest only)
-- Per-class Classification Report
-- Top 5 feature importances (tree-based models only)
-
-### Prediction Output
-
-```python
-predictor.predict(input_data) → {
-    'risk_level':              'low' | 'medium' | 'high',
-    'confidence':              float,          # max class probability
-    'adherence_score':         float,          # 0.0 – 1.0
-    'adherence_percentage':    float,          # adherence_score × 100
-    'model_used':              str,
-    'recommendation':          str,            # personalised action plan
-    'risk_probabilities':      {'low': f, 'medium': f, 'high': f},
-    'selected_features_used':  list[str]       # 7 selected feature names
-}
-```
-
-**`adherence_score` formula (bug fixed):**
-```python
-# OLD (buggy): 1 - (label_index / 2) → was always 1.0 for 'high'
-# NEW (fixed):
-adherence_score = low_probability + 0.5 * medium_probability
-# Higher score = better adherence likelihood (0 = certain high risk, 1 = certain low risk)
-```
-
-### Contextual Recommendations
-
-| Risk Level | Core Actions |
-|-----------|-------------|
-| `low` | Regular follow-ups, monthly check-ins, maintain current habits |
-| `medium` | Daily SMS reminders, weekly calls, pill organiser, bi-weekly monitoring |
-| `high` | Daily SMS + call reminders, family involvement, home visits, daily monitoring, weekly consultations, medication synchronisation |
-
-Additional rules appended contextually:
-- Age > 65 → "Caregiver assistance recommended"
-- Medicines > 5 → "Use medication adherence aids"
-- Treatment > 90 days → "Provide ongoing motivation"
-
-### Saved Model Artifacts
-
-All written to `backend/ml_models/` via `pickle`:
-
-| File | Contents |
-|------|---------|
-| `<model_name>_model.pkl` | Best trained model |
-| `scaler.pkl` | Fitted `StandardScaler` (for the 7 selected features) |
-| `label_encoders.pkl` | Dict of `LabelEncoder` objects |
-| `feature_names.pkl` | List of 7 selected feature names |
-| `feature_importances.pkl` | Dict of all 13 feature importance scores |
-| `dataset_info.pkl` | Dataset statistics snapshot |
-
-### Two Prediction Modes
-
-**Mode 1 — OCR Path** (`POST /api/predictions/predict/`):
-Input features are automatically derived from the OCR-parsed prescription:
-- `Age` ← `prescription.age_extracted` or `patient.age`
-- `dosage_normalized` ← `total_doses / 15` (capped at 1.0)
-- `Comorbidities_Count` ← `num_medicines - 2`
-- `severity_encoded` ← mapped from disease keyword
-- Others default to neutral values
-
-**Mode 2 — Smart Path** (`POST /api/predictions/predict-smart/`):
-Doctor manually inputs the 7 feature values in Flutter. Prediction is saved to `AdherencePrediction` if `patient_id` is supplied.
-
----
-
-## OCR Pipeline
-
-**Engine:** Tesseract OCR  
-**Class:** `PrescriptionOCR` in `backend/prescriptions/ocr_service.py`
-
-### Preprocessing
-
-**OpenCV path (primary — if cv2 is installed):**
-```
-cv2.imread(image_path)
-→ cv2.cvtColor(BGR → GRAY)
-→ cv2.threshold(THRESH_BINARY + THRESH_OTSU)
-→ cv2.fastNlMeansDenoising(h=10, templateWindowSize=7, searchWindowSize=21)
-→ pytesseract.image_to_string(processed_img)
-```
-
-**PIL path (fallback — if OpenCV not installed):**
-```
-Image.open(image_path)
-→ img.convert('L')  # grayscale
-→ pytesseract.image_to_string(img)
-```
-
-### Extraction Rules
-
-**Patient Name** — tried in order:
-1. `Patient Name: <name>`
-2. `Name: <name>`
-3. `Patient: <name>`
-→ Validated: length 3–50 characters
-
-**Age** — tried in order:
-1. `Age: <n>`
-2. `<n> years` / `<n> yrs`
-→ Validated: 1–120
-
-**Disease / Diagnosis** — tried in order:
-1. `Diagnosis: ...` / `Disease: ...` / `Condition: ...`
-2. Keyword scan for: `diabetes, hypertension, asthma, arthritis, thyroid, fever, cold, cough, infection, blood pressure, heart disease, kidney disease, liver disease`
-
-**Medicines** — line-by-line scan:
-- Pattern: `<Name> <dosage: mg|tablet|cap|ml>`
-- Extracts frequency (`<n> times daily`), duration (`<n> days`)
-- Skips lines containing: prescription, patient, doctor, date, diagnosis, name, age
-
-**Treatment Duration:**
-1. `<n> days` / `Duration: <n> days` / `for <n> days`
-→ Validated: 1–365, default: 7
-
-### Full `parse_prescription()` Return
-
-```python
-{
-    'success': True,
-    'extracted_text': str,
-    'patient_name': str | None,
-    'age': int | None,
-    'disease': str | None,
-    'medicines': [
-        {'name': str, 'dosage': str, 'frequency': str, 'duration_days': int},
-        ...
-    ],
-    'treatment_duration_days': int,
-    'total_medicines': int
-}
-```
-
-### Upload Flow
-
-```
-Doctor uploads image via Flutter
-  → POST /api/prescriptions/upload/
-  → prescription.ocr_status = 'processing'
-  → PrescriptionOCR.parse_prescription(image_path)
-  → On success:
-      Save extracted fields to Prescription
-      Create Medicine records for each parsed medicine
-      ocr_status = 'completed'
-  → On failure:
-      ocr_status = 'failed'
-```
-
-### Tesseract Path
-
-```python
-# settings.py
-TESSERACT_CMD = r'C:\Program Files\Tesseract-OCR\tesseract.exe'  # Windows
-# TESSERACT_CMD = '/usr/bin/tesseract'                           # Linux/macOS
-```
-
----
-
-## SMS Notification Service
-
-**Class:** `SMSReminderService` in `backend/notifications/sms_service.py`  
-**Singleton:** `sms_service = SMSReminderService()` — imported directly by notification views
-
-### Modes
-
-| `USE_TWILIO` | Behaviour |
-|-------------|-----------|
-| `True` | Real SMS via Twilio REST API |
-| `False` | Mock mode — message printed to Django console |
-
-### Phone Number Formatting (E.164)
-
-```python
-# Already has + prefix → used as-is
-# Starts with '91' and length 12 → +<number>
-# 10-digit → +91<number>  (Indian mobile)
-```
-
-### Message Types
-
-**Medication Reminder:**
-```
-Medication Reminder
-
-Hi <Patient Name>,
-
-Time to take your medicine:
-Medicine: <medicine_name>
-Dosage: <dosage>
-Frequency: <frequency>
-Take: <timing or 'as prescribed'>
-
-Stay healthy!
-```
-
-**OTP (Patient Login):**
-```
-Medication Adherence App
-
-Your OTP code is: <6-digit code>
-
-This code expires in 10 minutes.
-Do not share this code with anyone.
-```
-
-**High Risk Alert (to Doctor):**
-```
-HIGH RISK ALERT
-
-Patient: <full_name>
-Age: <age>
-Disease: <disease_type>
-
-Adherence Risk: HIGH
-Score: <adherence_score>
-
-Immediate intervention recommended.
-```
-
-### Reminder Scheduling
-
-`schedule_reminders_for_prescription(prescription)` creates reminders for **7 days**, for every medicine in the prescription:
-
-| Doses/day | Times |
-|-----------|-------|
-| 1 | 09:00 |
-| 2 | 09:00, 21:00 |
-| 3 | 08:00, 14:00, 20:00 |
-| 4+ | Distributed from 08:00 at `14 / n` hour intervals |
-
-Each reminder is saved as an `SMSReminder` with status `sent` (or `failed`) and `twilio_sid` (or `MOCK_<timestamp>`).
-
-### Statistics
-
-`get_reminder_statistics(patient=None)` returns:
-```python
-{
-    'total_reminders': int,
-    'sent': int,
-    'scheduled': int,
-    'failed': int,
-    'cancelled': int
-}
-```
-
----
-
-## Authentication System
-
-### Doctor Auth — Username + Password
-
-1. `POST /api/auth/doctor/login/` with `{username, password}`
-2. Django's `authenticate()` validates credentials against the `Doctor` + `User` model
-3. Returns JWT access token (7-day) + refresh token (30-day)
-4. JWT carries custom claim: `user_type = 'doctor'`
-
-### Patient Auth — OTP (Passwordless)
-
-1. `POST /api/auth/patient/send-otp/` with `{phone_number}`
-   - Generates 6-digit OTP, expiry = now + 10 minutes
-   - Demo mode: OTP returned in response body
-   - Production: sent via Twilio `send_otp_sms()`
-2. `POST /api/auth/patient/verify-otp/` with `{phone_number, otp_code}`
-   - Validates OTP hasn't expired and `is_verified=False`
-   - Gets or creates Django `User` with username `patient_<phone_number>`
-   - Ensures `user.is_active = True`
-   - Returns JWT access token
-
-### JWT Settings
-
-```python
-SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME':  timedelta(days=7),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
-    'ROTATE_REFRESH_TOKENS':  False,
-    'ALGORITHM':              'HS256',
-    'AUTH_HEADER_TYPES':      ('Bearer',),
-}
-```
-
-### Doctor Isolation
-
-Every doctor sees **only their own patients**. `get_doctor_patients` resolves the doctor from `request.user` via the JWT token — there is no hardcoded patient lookup.
-
----
-
-## API Reference
-
-All endpoints are prefixed with `/api/`. All except the four auth endpoints require `Authorization: Bearer <token>`.
-
-### Auth — `/api/auth/`
-
-| Method | Endpoint | Auth Required | Description |
-|--------|----------|:---:|-------------|
-| `POST` | `doctor/login/` | ❌ | Doctor login → JWT |
-| `POST` | `doctor/register/` | ❌ | Register new doctor |
-| `POST` | `patient/send-otp/` | ❌ | Send/generate OTP |
-| `POST` | `patient/verify-otp/` | ❌ | Verify OTP → JWT |
-| `POST` | `patient/register/` | ✅ | Register patient (by doctor) |
-| `GET` | `user/me/` | ✅ | Current user info |
-| `GET` | `doctor/patients/` | ✅ | Doctor's patient list |
-
-### Prescriptions — `/api/prescriptions/`
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|:---:|-------------|
-| `POST` | `upload/` | ✅ | Upload image → OCR processing |
-| `GET` | `<id>/` | ✅ | Single prescription detail |
-| `GET` | `patient/<id>/` | ✅ | All prescriptions for a patient |
-| `GET` | `doctor/all/` | ✅ | All prescriptions by logged-in doctor |
-| `GET` | `awareness/<disease_type>/` | ✅ | Awareness messages for a disease |
-| `POST` | `awareness/create/` | ✅ | Create awareness message |
-
-### Predictions — `/api/predictions/`
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|:---:|-------------|
-| `POST` | `predict/` | ✅ | Predict from uploaded prescription |
-| `POST` | `predict-smart/` | ✅ | Predict from direct feature values |
-| `GET` | `patient/<id>/` | ✅ | Prediction history for a patient |
-| `GET` | `high-risk/` | ✅ | All high-risk predictions |
-| `GET` | `stats/` | ✅ | Aggregate risk distribution |
-| `GET` | `features/` | ✅ | Selected features + all 13 importances |
-| `POST` | `models/train/` | ✅ | Trigger full model retraining |
-| `GET` | `models/all/` | ✅ | List all trained model records |
-
-#### `POST /api/predictions/predict-smart/` — Request Body
-```json
-{
-    "patient_id": 6,
-    "Age": 45,
-    "income_normalized": 0.3,
-    "dosage_normalized": 0.7,
-    "Previous_Adherence": 0,
-    "Comorbidities_Count": 3,
-    "severity_encoded": 2,
-    "healthcare_access_encoded": 1
-}
-```
-
-#### `GET /api/predictions/stats/` — Response
-```json
-{
-    "success": true,
-    "data": {
-        "total_predictions": 120,
-        "low_risk_count": 45,
-        "medium_risk_count": 50,
-        "high_risk_count": 25,
-        "low_risk_percentage": 37.5,
-        "medium_risk_percentage": 41.7,
-        "high_risk_percentage": 20.8
-    }
-}
-```
-
-#### `GET /api/predictions/features/` — Response
-```json
-{
-    "success": true,
-    "data": {
-        "selected_features": ["income_normalized", "dosage_normalized", ...],
-        "total_features_available": 13,
-        "features_selected": 7,
-        "importances_ranked": [
-            {"feature": "income_normalized", "importance": 0.1423, "selected": true},
-            ...
-        ]
-    }
-}
-```
-
-### Notifications — `/api/notifications/`
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|:---:|-------------|
-| `POST` | `prescription/<id>/schedule/` | ✅ | Schedule reminders for all medicines |
-| `GET` | `patient/<id>/reminders/` | ✅ | All reminders for a patient |
-| `GET` | `statistics/` | ✅ | SMS stats (total/sent/failed/scheduled) |
-| `POST` | `test-sms/` | ✅ | Send a test SMS |
-
----
-
-## Flutter Frontend
-
-### Screens
-
-| Screen | File | Role |
-|--------|------|------|
-| Splash | `splash_screen.dart` | Checks stored token → routes to doctor or patient login |
-| Doctor Login | `doctor_login_screen.dart` | Username + password form |
-| Doctor Dashboard | `doctor_dashboard.dart` | Patient list, prescriptions, stats |
-| Smart Prediction | `smart_prediction_screen.dart` | 7-feature form + animated result card |
-| Feature Importance | `feature_importance_screen.dart` | Ranked bar chart of all 13 features |
-| Patient Login | `patient_login_screen.dart` | Phone number + OTP verification |
-| Patient Dashboard | `patient_dashboard.dart` | Prescriptions, reminders, awareness messages |
-
-### Smart Prediction Screen — Input Controls
-
-| Feature | Widget |
-|---------|--------|
-| Age | `TextFormField` (validated 1–120) |
-| Income Level | `Slider` 0.0–1.0 with live value badge |
-| Dosage Level | `Slider` 0.0–1.0 with live value badge |
-| Previous Adherence | Two-button toggle (Good History / Poor History) |
-| Number of Other Diseases | `TextFormField` (validated 0–20) |
-| Condition Severity | Three-way segmented selector (Mild / Moderate / Severe) |
-| Healthcare Access | Three-way segmented selector (Poor / Average / Good) |
-
-Result card shows: risk badge (green/orange/red), confidence %, adherence score progress bar, per-class probability bars, full recommendation text, model name, and "Saved to history" indicator.
-
-### Feature Importance Screen
-
-Horizontal bar chart of all 13 features ranked by importance. Selected features highlighted in blue with `SELECTED` badge; non-selected in grey. Includes a "What Does This Mean?" card with key insights about the strongest predictors.
-
-### API Service (`services/api_service.dart`)
-
-Singleton HTTP client with:
-- JWT stored in `SharedPreferences` (key: `auth_token`)
-- Auto-injects `Authorization: Bearer <token>` on all authenticated requests
-- `uploadFile()` for multipart prescription image upload
-- On `kIsWeb`: replaces `localhost` with `127.0.0.1` to avoid CORS
-- Typed exceptions: 401 → "Session expired", 403 → "Authentication failed"
-
-### Base URL Config
-
-```dart
-// lib/config/constants.dart
-static const String baseUrl = 'http://192.168.1.10/api';
-
-// Android Emulator:  http://10.0.2.2:8000/api
-// Physical Device:   http://<LAN_IP>:8000/api
-// Flutter Web:       http://127.0.0.1:8000/api
-```
-
----
-
-## Configuration & Settings
-
-### Key `settings.py` Values
-
-```python
-TIME_ZONE = 'Asia/Kolkata'
-
-MEDIA_URL  = 'media/'
-MEDIA_ROOT = BASE_DIR / 'media'        # prescription images stored here
-
-SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME':  timedelta(days=7),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
-}
-
-CORS_ALLOW_ALL_ORIGINS = True          # development only — restrict in production
-
-TESSERACT_CMD = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-
-USE_TWILIO          = True
-TWILIO_ACCOUNT_SID  = 'AC...'
-TWILIO_AUTH_TOKEN   = '...'
-TWILIO_PHONE_NUMBER = '+1...'
-```
-
-> ⚠️ **Security notice:** Move `SECRET_KEY`, all Twilio credentials, and `DEBUG=False` to environment variables before any deployment. Never commit real credentials to version control.
-
----
-
-## Getting Started
-
-### Prerequisites
-
-- Python 3.10+
-- Flutter SDK 3.x
-- Tesseract OCR on PATH
-- (Optional) Twilio account for live SMS
-
-### Backend Setup
-
-```bash
-# 1. Clone and navigate to backend
-git clone https://github.com/mohammedsameer777/medication_adherence_app.git
-cd medication_adherence_app/backend
-
-# 2. Virtual environment
-python -m venv venv
-source venv/bin/activate        # macOS/Linux
-venv\Scripts\activate           # Windows
-
-# 3. Install dependencies
+├── backend/                    # Django REST API
+│   ├── accounts/               # Doctor, Patient, OTP models & auth
+│   ├── prescriptions/          # Prescription upload, OCR, medicine models
+│   │   └── ocr_service.py      # 3-tier OCR: Gemini → OCR.space → Tesseract
+│   ├── predictions/            # ML pipeline, XGBoost, adherence prediction
+│   │   ├── ml_service.py       # Training, feature engineering, prediction
+│   │   └── data_loader.py      # Kaggle dataset loader
+│   ├── notifications/          # Celery tasks, Twilio SMS, reminders
+│   ├── ml_models/              # Saved model files (.pkl)
+│   ├── datasets/               # patient_adherence_dataset.csv
+│   └── medication_backend/     # Django settings, URLs, Celery config
+├── medication_app/             # Flutter frontend
+│   ├── lib/
+│   │   ├── screens/doctor/     # Doctor UI screens
+│   │   ├── screens/patient/    # Patient UI screens
+│   │   └── services/           # ApiService singleton
+│   └── pubspec.yaml
+└── requirements.txt
+
+⚙️ Setup & Installation
+Prerequisites
+•	Python 3.10+
+•	Flutter SDK 3.0+
+•	Redis (for Celery)
+•	Tesseract OCR (optional, local fallback)
+•	Twilio account (optional, mock mode available)
+•	Google Gemini API key (free at aistudio.google.com)
+Backend Setup
+Step 1 — Install dependencies
+cd backend
 pip install -r requirements.txt
-
-# 4. Migrate database
+Step 2 — Database migrations
 python manage.py makemigrations
 python manage.py migrate
+Step 3 — Configure settings.py
+GEMINI_API_KEY    = 'your-gemini-key'        # aistudio.google.com (free)
+OCR_SPACE_API_KEY = 'your-ocrspace-key'      # ocr.space (25k/month free)
+TWILIO_ACCOUNT_SID  = 'your-sid'
+TWILIO_AUTH_TOKEN   = 'your-token'
+TWILIO_PHONE_NUMBER = '+1xxxxxxxxxx'
+USE_TWILIO = True   # False for mock mode
+Step 4 — Train the ML model
+POST /api/predictions/models/train/
+# Or call predictor.train_models() in Django shell
+# This runs: data load → feature engineering → RFE
+#            → SMOTE → StandardScaler → XGBoost → save
+Step 5 — Start services
+# Terminal 1 — Django server
+python manage.py runserver
 
-# 5. Create admin superuser
-python manage.py createsuperuser
+# Terminal 2 — Redis
+redis-server
 
-# 6. Train ML models (first run only — takes 2–5 minutes)
-python manage.py shell
->>> from predictions.ml_service import predictor
->>> predictor.train_models()
->>> exit()
+# Terminal 3 — Celery worker
+celery -A medication_backend worker --loglevel=info
 
-# 7. Start server
-python manage.py runserver 0.0.0.0:8000
-```
-
-> After training, model files are saved to `backend/ml_models/`. On subsequent server starts, models are loaded from disk automatically.
-
-### Flutter Setup
-
-```bash
-cd ../medication_app
-
+# Terminal 4 — Celery Beat (scheduled tasks)
+celery -A medication_backend beat --loglevel=info
+Flutter Setup
+Flutter steps
+cd medication_app
 flutter pub get
 
-# Edit lib/config/constants.dart → set correct baseUrl for your environment
+# Update API base URL in lib/config/constants.dart
+# Default: http://localhost:8000
 
 flutter run
-```
 
-### Tesseract Installation
+🗂️ Saved ML Model Files
+File	Contents
+xgboost_model.pkl	Trained XGBoost classifier (primary)
+scaler.pkl	StandardScaler fitted on training data
+rfe_selector.pkl	RFE selector (20 of 34 features)
+feature_names.pkl	List of the 20 selected feature names
+label_encoders.pkl	LabelEncoder for risk classes
+feature_importances.pkl	All 34 feature importance scores
+all_engineered_cols.pkl	Ordered list of all 34 engineered columns
+dataset_info.pkl	Dataset statistics for display
 
-| OS | Command |
-|----|---------|
-| Windows | Installer from https://github.com/UB-Mannheim/tesseract/wiki |
-| Ubuntu/Debian | `sudo apt install tesseract-ocr` |
-| macOS | `brew install tesseract` |
+🔑 Key Design Decisions
+•	Gemini Vision over traditional OCR: Handwritten prescriptions (common in India) are poorly read by Tesseract. Gemini handles both handwritten and printed text and returns structured JSON directly, removing the need for fragile regex on raw text.
+•	XGBoost forced as primary: XGBoost consistently outperforms on tabular medical data. Rather than dynamically selecting the best model each time, it is hardcoded as the deployed model for predictability.
+•	SMOTE for imbalanced classes: Medical adherence datasets are naturally imbalanced (fewer high-risk patients). SMOTE generates synthetic samples rather than just upsampling to avoid overfitting on duplicates.
+•	Feature engineering doubles signal: 13 raw features alone cannot capture non-linear relationships like 'elderly patient with high severity and no social support'. Composite features like risk_composite and protective_score encode these relationships explicitly.
+•	OTP-based patient auth: Patients, especially elderly, often don't remember passwords. Phone-based OTP is simpler and already tied to the SMS reminder infrastructure.
+•	Celery + Redis for SMS: Sending SMS at upload time would create sync delays. Celery defers it to background workers, and Beat polls every 60 seconds to send reminders at the right scheduled time.
 
-Verify: `tesseract --version`, then update `TESSERACT_CMD` in `settings.py`.
+🛠️ Complete Tech Stack
+Category	Technology	Version / Notes
+Backend Framework	Django + DRF	REST Framework + SimpleJWT
+ML - Primary	XGBoost	89.42% accuracy, 500 trees
+ML - Comparison	LightGBM, Random Forest, GBM, MLP, KNN, LR	All trained, XGBoost deployed
+Feature Selection	RFE (sklearn)	20 of 34 features
+Imbalance	SMOTE (imbalanced-learn)	Synthetic minority oversampling
+Scaling	StandardScaler (sklearn)	Fitted on training data
+OCR Primary	Google Gemini 1.5 Flash	Free tier, handles handwriting
+OCR Fallback 1	OCR.space API	25k requests/month free
+OCR Fallback 2	Tesseract + OpenCV	Local, fully offline
+Task Queue	Celery + Redis	Beat polls every 60 seconds
+SMS	Twilio REST API	India phone support (+91)
+Auth	JWT (SimpleJWT) + OTP	Doctor JWT, Patient OTP
+Database	SQLite (dev)	Easily switchable to PostgreSQL
+Frontend	Flutter (Dart)	Runs on Android, iOS, Web
+State Mgmt	Provider	Singleton ApiService pattern
+Charts	fl_chart	Feature importance visualization
+Timezone	Asia/Kolkata (IST)	All server timestamps
 
----
-
-## Demo Credentials
-
-| Role | Field | Value |
-|------|-------|-------|
-| Doctor | Username | `dr_john` |
-| Doctor | Password | `password123` |
-| Patient | Phone | `8765432109` |
-| Patient | OTP | Displayed on screen in mock/demo mode |
-
----
-
-## Known Issues & Fixes Applied
-
-| Bug | Fix Applied |
-|-----|-------------|
-| `adherence_score` was always `1.0` for high-risk patients | `adherence_score = low_prob + 0.5 × medium_prob` |
-| All doctors saw every patient (hardcoded `id=1`) | Doctor resolved from JWT `request.user` |
-| Patient users created with `is_active=False` → 401 on all requests | `user.is_active = True` enforced on create and on every login |
-| `Medicine.related_name` clashed with `AdherencePrediction` model | Renamed to `related_name='medicines'` |
-| `AdherencePrediction.prescription` non-nullable blocked smart predictions | `null=True, blank=True` added |
-| Twilio hardcoded in `__init__`, impossible to toggle without code change | `USE_TWILIO` flag read from `settings.py` at runtime |
-| Flutter Web CORS error when using `localhost` | `ApiService` replaces `localhost` with `127.0.0.1` when `kIsWeb` is true |
-
----
-
-## License
-
-Developed for academic purposes. Not intended for production clinical use without appropriate clinical validation and regulatory compliance.
+Built with Django · Flutter · XGBoost · Gemini AI · Twilio · Redis
