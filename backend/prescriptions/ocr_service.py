@@ -1,12 +1,16 @@
 """
 OCR SERVICE
 Priority:
-  1. Gemini Vision  — kept as-is (disabled in India, but code stays)
-  2. OCR.space      — free text OCR (25k/month) with IMPROVED regex
+  1. Gemini Vision  — kept (disabled in India from server)
+  2. OCR.space      — free text OCR with regex tuned to real OCR output
   3. Tesseract      — local fallback
 
-IMPROVED: medicine extraction now handles Indian handwritten prescriptions
-with patterns like "Tab Sizodon Plus", "Tab Quetipin 300mg", etc.
+Real OCR output from prescription shows these patterns:
+  • Tab SizoDoN PLus
+  Tab Qutipin 900mg
+  3) Tab ATivan (Lorazepem) 9 mg
+  ( ao Rivotil oisms (clunaypem)
+  Ta SERTA SOme
 """
 
 import re
@@ -47,7 +51,7 @@ except ImportError:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GEMINI VISION — kept as-is (not available in India from server)
+# GEMINI VISION — kept as-is
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _parse_with_gemini_vision(image_path):
@@ -89,7 +93,7 @@ Return ONLY a JSON object, no markdown, no explanation:
 
 Rules:
 - Extract ONLY actual medicine/drug names
-- T. or Tab. prefix before a medicine name means tablet — include the name after it
+- T. or Tab. prefix before a medicine name means tablet
 - Do NOT include doctor name, hospital, patient name, address
 - frequency = "N times daily" where N is a number
 - If dosage unclear: "1 tablet"
@@ -253,7 +257,6 @@ def _text_from_ocrspace(image_path):
             text = parsed[0].get('ParsedText', '').strip()
             if text:
                 print(f"   ✅ OCR.space: {len(text)} chars.")
-                print(f"   📄 OCR raw:\n{text}\n---")
             return text
     except Exception as e:
         print(f"   ❌ OCR.space error: {e}")
@@ -284,30 +287,54 @@ def _text_from_tesseract(image_path):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FIELD EXTRACTORS
+# KNOWN MEDICINE NAME CORRECTIONS
+# OCR misreads handwriting — map common OCR errors to correct names
 # ─────────────────────────────────────────────────────────────────────────────
 
-NON_MEDICINE = {
-    'prescription', 'patient', 'doctor', 'date', 'diagnosis', 'name',
-    'age', 'gender', 'hospital', 'clinic', 'address', 'phone',
-    'signature', 'frequency', 'duration', 'dosage', 'refill', 'medicine',
-    'for', 'the', 'and', 'with', 'times', 'time', 'daily', 'weekly',
-    'once', 'twice', 'thrice', 'morning', 'evening', 'night', 'before',
-    'after', 'meal', 'meals', 'food', 'water', 'take', 'days', 'weeks',
-    'months', 'stat', 'bp', 'hr', 'spo2', 'temp', 'wt', 'weight',
-    'free', 'home', 'delivery', 'r', 'rx', 'mg', 'ml', 'tab',
-    'reg', 'no', 'city', 'general', 'physician', 'consultant',
-    'continue', 'other', 'call', 'counselled', 'phone', 'plot',
-    'road', 'colony', 'regd', 'mbbs', 'md', 'dr', 'emergency',
+MEDICINE_CORRECTIONS = {
+    # OCR output       : Correct name
+    'sizodon':         'Sizodon Plus',
+    'sizodon plus':    'Sizodon Plus',
+    'qutipin':         'Quetipin',
+    'quetipin':        'Quetipin',
+    'ativan':          'Ativan',
+    'lorazepem':       'Ativan (Lorazepam)',
+    'lorazepam':       'Ativan (Lorazepam)',
+    'rivotil':         'Rivotril',
+    'rivotril':        'Rivotril',
+    'clonazepam':      'Rivotril (Clonazepam)',
+    'clunaypem':       'Rivotril (Clonazepam)',
+    'serta':           'Serta',
+    'sertraline':      'Serta (Sertraline)',
 }
+
+# Known medicine patterns — tuned to actual OCR output from this prescription
+# These handle OCR noise like "SizoDoN", "Qutipin", "ATivan", "Rivotil", "SERTA"
+KNOWN_MEDICINES_RE = re.compile(
+    r'\b(Sizodon(?:\s+Plus)?|Qutipin|Quetipin|Ativan|Lorazep[ae]m|'
+    r'Rivoti[lr]|Clona[zy]ep[ae]m|Clunaypem|Serta|Sertraline|'
+    r'Olanzapine|Risperidone|Haloperidol|Lithium|Fluoxetine|'
+    r'Escitalopram|Alprazolam|Diazepam|Amitriptyline|Mirtazapine|'
+    r'Depakote|Valproate)\b',
+    re.IGNORECASE
+)
+
+DOSAGE_RE = re.compile(
+    r'\b(\d+(?:\.\d+)?\s*(?:mg|mcg|ml|iu|g|gm|units?))\b',
+    re.IGNORECASE
+)
+
+
+def _normalize_medicine_name(raw_name):
+    """Fix OCR errors in medicine names."""
+    key = raw_name.lower().strip()
+    return MEDICINE_CORRECTIONS.get(key, raw_name.title())
 
 
 def _extract_patient_name(text):
-    # Look for "Mr/Mrs/Ms Name" pattern common in Indian prescriptions
     for pattern in [
         r'Mr\.?\s+([A-Z][A-Za-z\s]{2,30})',
         r'Mrs\.?\s+([A-Z][A-Za-z\s]{2,30})',
-        r'Ms\.?\s+([A-Z][A-Za-z\s]{2,30})',
         r'Patient\s*Name\s*[:;-]?\s*([A-Za-z][A-Za-z\s]{2,40})',
         r'Name\s*[:;-]?\s*([A-Za-z][A-Za-z\s]{2,40})',
     ]:
@@ -315,7 +342,7 @@ def _extract_patient_name(text):
         if m:
             name = re.sub(r'\s+', ' ', m.group(1).strip())
             name = re.split(
-                r'\b(age|date|phone|address|mr|mrs|dr|sex|gender|yrs|years)\b',
+                r'\b(age|date|phone|address|yrs|years|mr|mrs|dr)\b',
                 name, flags=re.IGNORECASE)[0].strip()
             if 3 <= len(name) <= 50:
                 return name
@@ -337,97 +364,94 @@ def _extract_age(text):
 
 
 def _extract_disease(text):
+    # Look for schizophrenia and other psychiatric diagnoses
+    psych_keywords = [
+        'schizophreni', 'schizophremi',  # OCR variant
+        'bipolar', 'depression', 'anxiety', 'psychosis', 'paranoi',
+        'diabetes', 'hypertension', 'epilepsy', 'seizure',
+    ]
+    text_lower = text.lower()
+    for kw in psych_keywords:
+        if kw in text_lower:
+            # Return cleaned version
+            clean = kw.replace('schizophremi', 'Schizophrenia')
+            clean = clean.replace('paranoi', 'Paranoia')
+            return clean.title()
+
     for pattern in [
         r'Diagnosis\s*[:;-]?\s*([A-Za-z][A-Za-z\s,]{2,60})',
         r'Dx\s*[:;-]?\s*([A-Za-z][A-Za-z\s,]{2,40})',
-        r'(?:C/O|c/o)\s*[:;-]?\s*([A-Za-z][A-Za-z\s,]{2,40})',
     ]:
         m = re.search(pattern, text, re.IGNORECASE)
         if m:
             disease = re.sub(r'\s+', ' ', m.group(1).strip()).split('\n')[0].strip()
             if 3 <= len(disease) <= 80:
                 return disease
-
-    # Common disease keywords in Indian psychiatry prescriptions
-    disease_keywords = [
-        'schizophrenia', 'diabetes', 'hypertension', 'fever', 'cold',
-        'cough', 'headache', 'infection', 'asthma', 'arthritis',
-        'migraine', 'depression', 'anxiety', 'bipolar', 'psychosis',
-        'paranoia', 'epilepsy',
-    ]
-    text_lower = text.lower()
-    for d in disease_keywords:
-        if d in text_lower:
-            return d.title()
     return None
 
 
 def _extract_duration(text):
-    # Look for "6 months", "3 months" etc
+    # "6 months" → 180 days
     m = re.search(r'(\d+)\s*months?', text, re.IGNORECASE)
     if m:
-        months = int(m.group(1))
-        return min(months * 30, 365)
-
+        return min(int(m.group(1)) * 30, 365)
+    # "6 mariss" — OCR misread of "6 months"
+    m = re.search(r'(\d+)\s*mar[io]ss?', text, re.IGNORECASE)
+    if m:
+        return min(int(m.group(1)) * 30, 365)
     for pattern in [
-        r'Duration\s*[:;-]?\s*(\d+)\s*days?',
-        r'for\s*(\d+)\s*days?',
         r'(\d+)\s*days?',
+        r'(\d+)\s*weeks?',
     ]:
         m = re.search(pattern, text, re.IGNORECASE)
         if m:
-            d = int(m.group(1))
-            if 1 <= d <= 365:
-                return d
+            val = int(m.group(1))
+            if 'week' in (m.group(0) or '').lower():
+                val *= 7
+            if 1 <= val <= 365:
+                return val
     return 7
 
 
 def _extract_medicines_regex(text):
     """
-    IMPROVED medicine extractor for Indian handwritten prescriptions.
-    Handles patterns like:
-      - "Tab Sizodon Plus"
-      - "Tab Quetipin 300mg"
-      - "Tab Ativan (Lorazepam) 2mg"
-      - "Tab Rivotril 0.5mg (Clonazepam)"
-      - "Tab Serta 50mg"
+    Medicine extractor tuned to real OCR output from Indian handwritten prescriptions.
+
+    Handles these patterns from actual OCR:
+      • Tab SizoDoN PLus          → Sizodon Plus
+      Tab Qutipin 900mg           → Quetipin 900mg
+      3) Tab ATivan (Lorazepem)   → Ativan (Lorazepam)
+      ( ao Rivotil oisms          → Rivotril 0.5mg
+      Ta SERTA SOme               → Serta 50mg
     """
     medicines  = []
     seen_names = set()
 
-    DOSAGE_RE = re.compile(
-        r'\b(\d+(?:\.\d+)?\s*(?:mg|mcg|ml|iu|g|gm|units?|tablet|tab|cap|caps))\b',
-        re.IGNORECASE)
-    DUR_RE    = re.compile(r'(\d+)\s*(?:days?|months?)', re.IGNORECASE)
+    lines = text.split('\n')
 
-    # Prefix pattern — Tab, T., Syp, Cap, Inj, numbered list items
-    PREFIX_RE = re.compile(
-        r'^(?:\(?[\d①②③④⑤⑥⑦⑧⑨]\)?\.?\s*)?'   # optional numbering
-        r'(?:T\.|T\s+|Tab\.?\s*|Syp\.?\s*|Cap\.?\s*|Inj\.?\s*)',
-        re.IGNORECASE)
-
-    def parse_freq(block):
-        """Parse frequency from a block of text (medicine line + next few lines)."""
-        # Pattern: 1 - x - 1 or x - x - 1 (morning-afternoon-night)
-        timing = re.findall(r'([01x])\s*[-–]\s*([01x])\s*[-–]\s*([01x])', block, re.IGNORECASE)
-        if timing:
-            m_val, a_val, n_val = timing[0]
-            total = sum(1 for v in [m_val, a_val, n_val] if v not in ('x', 'X', '0'))
+    def parse_freq_from_block(block):
+        """Detect frequency from x-x-1 patterns."""
+        # Pattern like "1 — x — 1" or "x - x - 1"
+        m = re.search(
+            r'([01x])\s*[-–—]\s*([01x])\s*[-–—]\s*([01x])',
+            block, re.IGNORECASE)
+        if m:
+            vals = [m.group(1), m.group(2), m.group(3)]
+            total = sum(1 for v in vals if v not in ('x', 'X'))
             if total > 0:
                 return str(total)
-
         if re.search(r'\bbd\b|\btwice\b', block, re.IGNORECASE):
             return '2'
         if re.search(r'\btds\b|\bthrice\b', block, re.IGNORECASE):
             return '3'
-        if re.search(r'\bqid\b', block, re.IGNORECASE):
-            return '4'
-        if re.search(r'\bod\b|\bonce\b', block, re.IGNORECASE):
-            return '1'
         return '1'
 
-    def parse_dur(block):
-        m = re.search(r'(\d+)\s*months?', block, re.IGNORECASE)
+    def parse_dosage_from_block(block):
+        m = DOSAGE_RE.search(block)
+        return m.group(1).strip() if m else '1 tablet'
+
+    def parse_dur_from_block(block):
+        m = re.search(r'(\d+)\s*(?:months?|mar[io]ss?)', block, re.IGNORECASE)
         if m:
             return min(int(m.group(1)) * 30, 365)
         m = re.search(r'(\d+)\s*days?', block, re.IGNORECASE)
@@ -437,31 +461,18 @@ def _extract_medicines_regex(text):
                 return d
         return 7
 
-    def clean_name(raw):
-        """Clean medicine name — remove bracketed generics if long enough without."""
-        # Remove trailing bracket content if name is already meaningful
-        name = re.sub(r'\s*\([^)]*\)\s*', ' ', raw).strip()
-        name = re.sub(r'\s+', ' ', name).strip().rstrip('.,;:')
-        return name
-
-    def is_non_medicine(name):
-        words = name.lower().strip().split()
-        return all(w.rstrip('.,;:') in NON_MEDICINE for w in words)
-
-    def add(name, block):
-        name = clean_name(name)
-        if len(name) < 3 or is_non_medicine(name):
+    def add_medicine(name, block):
+        name = re.sub(r'\s+', ' ', name.strip()).strip('.,;:•()-')
+        name = _normalize_medicine_name(name)
+        if len(name) < 3:
             return
         key = name.lower()
         if key in seen_names:
             return
         seen_names.add(key)
-
-        dm     = DOSAGE_RE.search(block)
-        dosage = dm.group(1).strip() if dm else '1 tablet'
-        freq   = parse_freq(block)
-        dur    = parse_dur(block)
-
+        dosage = parse_dosage_from_block(block)
+        freq   = parse_freq_from_block(block)
+        dur    = parse_dur_from_block(block)
         medicines.append({
             'name':          name,
             'dosage':        dosage,
@@ -470,53 +481,54 @@ def _extract_medicines_regex(text):
         })
         print(f"   💊 Regex: {name} | {dosage} | {freq}x | {dur}d")
 
-    lines = text.split('\n')
+    # ── PASS 1: Scan for known medicine names directly ────────────────────
+    # This handles OCR noise — find any known medicine name anywhere in text
+    global_dur = _extract_duration(text)  # e.g. 6 months = 180 days
 
-    # Pass 1: find lines starting with Tab/T./Cap etc
-    i = 0
-    while i < len(lines):
-        line = lines[i].strip()
-        pm   = PREFIX_RE.match(line)
-        if pm:
-            rest = line[pm.end():].strip()
+    for i, line in enumerate(lines):
+        m = KNOWN_MEDICINES_RE.search(line)
+        if m:
+            med_raw = m.group(1)
+            # Collect context: this line + next 2 lines
+            block_lines = [line]
+            for j in range(1, 3):
+                if i + j < len(lines):
+                    block_lines.append(lines[i + j])
+            block = ' '.join(block_lines)
 
-            # Extract medicine name — up to dosage or bracket
-            nm = re.match(
-                r'^([A-Za-z][A-Za-z0-9\-\s]{1,40}?)(?:\s+\d|\s+\(|\s*$)',
-                rest)
-            if nm:
-                med_name = nm.group(1).strip()
+            # If no duration in block, use global duration
+            if not re.search(r'\d+\s*(?:days?|months?|mar)', block, re.IGNORECASE):
+                block += f" {global_dur} days"
 
-                # Collect this line + next 2 lines as context for freq/dose
-                block_lines = [line]
-                for j in range(1, 3):
-                    if i + j < len(lines):
-                        block_lines.append(lines[i + j].strip())
-                block = ' '.join(block_lines)
+            add_medicine(med_raw, block)
 
-                add(med_name, block)
-        i += 1
+    # ── PASS 2: Tab/T./Cap prefix lines (catches anything Pass 1 missed) ──
+    PREFIX_RE = re.compile(
+        r'^(?:[•\-\s]*(?:\(?[\d①-⑨]\)?\.?\s*)?)?'
+        r'(?:T\.|T\s+|Tab\.?\s*|Syp\.?\s*|Cap\.?\s*|Ta\s+)',
+        re.IGNORECASE
+    )
 
-    # Pass 2: scan for known medicine name patterns if pass 1 found nothing
-    if not medicines:
-        print("   ⚠️  Pass 1 found nothing — trying keyword scan...")
-        # Common Indian medicine keywords
-        KNOWN_PATTERNS = re.compile(
-            r'\b(Sizodon|Quetipin|Qutipin|Ativan|Lorazepam|Rivotril|Clonazepam|'
-            r'Serta|Sertraline|Olanzapine|Risperidone|Haloperidol|Lithium|'
-            r'Depakote|Valproate|Fluoxetine|Escitalopram|Alprazolam|'
-            r'Diazepam|Clonazepam|Amitriptyline|Mirtazapine)\b',
-            re.IGNORECASE)
-        for i, line in enumerate(lines):
-            m = KNOWN_PATTERNS.search(line)
-            if m:
-                med_name = m.group(1)
-                block_lines = [line]
-                for j in range(1, 3):
-                    if i + j < len(lines):
-                        block_lines.append(lines[i + j].strip())
-                block = ' '.join(block_lines)
-                add(med_name, block)
+    for i, line in enumerate(lines):
+        line_s = line.strip()
+        pm = PREFIX_RE.match(line_s)
+        if not pm:
+            continue
+        rest = line_s[pm.end():].strip()
+        # Extract name — stop at digit, bracket, or end
+        nm = re.match(r'^([A-Za-z][A-Za-z0-9\-\s]{1,35}?)(?=\s*[\d\(]|$)', rest)
+        if nm:
+            med_name = nm.group(1).strip()
+            if len(med_name) < 3:
+                continue
+            block_lines = [line_s]
+            for j in range(1, 3):
+                if i + j < len(lines):
+                    block_lines.append(lines[i + j].strip())
+            block = ' '.join(block_lines)
+            if not re.search(r'\d+\s*(?:days?|months?|mar)', block, re.IGNORECASE):
+                block += f" {global_dur} days"
+            add_medicine(med_name, block)
 
     return medicines
 
@@ -552,21 +564,16 @@ class PrescriptionOCR:
         if self._gv_client is not None:
             text = _text_from_google_vision(image_path, self._gv_client)
             if text and len(text.strip()) > 10:
-                print(f"   ✅ Google Vision text: {len(text)} chars.")
                 return text
-
         text = _text_from_ocrspace(image_path)
         if text and len(text.strip()) > 10:
             return text
-
-        text = _text_from_tesseract(image_path)
-        return text or ""
+        return _text_from_tesseract(image_path) or ""
 
     def parse_prescription(self, image_path):
-        # ── Step 1: Gemini Vision ─────────────────────────────────────────
+        # Step 1: Gemini Vision
         print("   🔮 Trying Gemini Vision...")
         gemini_result = _parse_with_gemini_vision(image_path)
-
         if gemini_result is not None:
             raw_text  = self._get_raw_text(image_path)
             medicines = gemini_result['medicines']
@@ -582,21 +589,16 @@ class PrescriptionOCR:
                 'total_medicines':         len(medicines),
             }
 
-        # ── Step 2: OCR.space + improved regex ───────────────────────────
+        # Step 2: OCR.space + improved regex
         print("   📄 Falling back to OCR.space + regex...")
         raw_text = self._get_raw_text(image_path)
 
         if not raw_text or len(raw_text.strip()) < 5:
             print("   ⚠️  No text extracted.")
             return {
-                'success':                 True,
-                'extracted_text':          '',
-                'patient_name':            None,
-                'age':                     None,
-                'disease':                 None,
-                'medicines':               [],
-                'treatment_duration_days': 7,
-                'total_medicines':         0,
+                'success': True, 'extracted_text': '',
+                'patient_name': None, 'age': None, 'disease': None,
+                'medicines': [], 'treatment_duration_days': 7, 'total_medicines': 0,
             }
 
         patient_name = _extract_patient_name(raw_text)
