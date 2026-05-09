@@ -12,10 +12,6 @@ class ApiService {
 
   String? _token;
 
-  // FIX: removed redundant _baseUrl getter that duplicated platform logic.
-  // AppConstants.baseUrl is already platform-aware (Android emulator / iOS /
-  // web / desktop). Using it directly avoids the old bug where the emulator
-  // still got the physical device IP.
   String get _baseUrl => AppConstants.baseUrl;
 
   // ── Token management ───────────────────────────────────────────────────────
@@ -149,9 +145,6 @@ class ApiService {
     }
   }
 
-  // FIX: _handleResponse no longer swallows the real Django error body.
-  // The inner catch now re-throws the original exception instead of a
-  // generic status-code message, so debug logs show the actual error.
   Map<String, dynamic> _handleResponse(http.Response response) {
     print('Response code: ${response.statusCode}');
     print('Response body: ${response.body}');
@@ -160,14 +153,12 @@ class ApiService {
       return json.decode(response.body) as Map<String, dynamic>;
     }
 
-    // Try to parse a structured error from Django
     String errorMessage;
     try {
       final error = json.decode(response.body) as Map<String, dynamic>;
       errorMessage = (error['message'] ?? error['detail'] ?? '').toString();
       if (errorMessage.isEmpty) errorMessage = response.body;
     } catch (_) {
-      // Body is not JSON — use raw body so we can see the real Django error
       errorMessage = response.body.isNotEmpty
           ? response.body
           : 'Request failed with status ${response.statusCode}';
@@ -199,14 +190,10 @@ class ApiService {
 
       await setToken(token);
 
-      // FIX: save userId and userType so every screen can read them
-      // from SharedPreferences without another API call.
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(AppConstants.keyUserType, 'doctor');
-      await prefs.setString(
-          AppConstants.keyUserId, doctor['id'].toString());
-      await prefs.setString(
-          AppConstants.keyUserData, json.encode(doctor));
+      await prefs.setString(AppConstants.keyUserId, doctor['id'].toString());
+      await prefs.setString(AppConstants.keyUserData, json.encode(doctor));
     }
     return response;
   }
@@ -234,14 +221,10 @@ class ApiService {
 
       await setToken(token);
 
-      // FIX: save patient userId and userType — without this every screen
-      // that reads keyUserId from SharedPreferences gets null and crashes.
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(AppConstants.keyUserType, 'patient');
-      await prefs.setString(
-          AppConstants.keyUserId, patient['id'].toString());
-      await prefs.setString(
-          AppConstants.keyUserData, json.encode(patient));
+      await prefs.setString(AppConstants.keyUserId, patient['id'].toString());
+      await prefs.setString(AppConstants.keyUserData, json.encode(patient));
     }
     return response;
   }
@@ -267,15 +250,8 @@ class ApiService {
 
   // ── Prescription APIs ──────────────────────────────────────────────────────
 
-  /// Upload prescription image, then automatically:
-  ///   1. Schedule SMS reminders (uses prescription_id from upload response)
-  ///   2. Run adherence prediction
-  ///
-  /// FIX: previously upload succeeded but neither reminders nor prediction
-  /// were ever triggered — the full pipeline now runs in one call.
   Future<Map<String, dynamic>> uploadPrescription(
       File image, int patientId, int doctorId) async {
-    // Step 1 — upload image + OCR
     final uploadResponse = await uploadFile(
       AppConstants.uploadPrescription,
       image,
@@ -290,7 +266,6 @@ class ApiService {
         uploadResponse['data']?['prescription_id'] as int?;
 
     if (prescriptionId != null) {
-      // Step 2 — schedule SMS reminders (non-fatal if it fails)
       try {
         await scheduleReminders(prescriptionId);
         print('📅 Reminders scheduled for prescription #$prescriptionId');
@@ -298,7 +273,6 @@ class ApiService {
         print('⚠️ scheduleReminders failed (non-fatal): $e');
       }
 
-      // Step 3 — run adherence prediction (non-fatal if it fails)
       try {
         await predictAdherence(patientId, prescriptionId);
         print('🤖 Adherence prediction run for prescription #$prescriptionId');
@@ -312,6 +286,23 @@ class ApiService {
 
   Future<Map<String, dynamic>> getPatientPrescriptions(int patientId) async {
     return await get('${AppConstants.getPatientPrescriptions}$patientId/');
+  }
+
+  /// Add missing medicines to an existing prescription.
+  /// POST /api/prescriptions/<id>/add-medicines/
+  Future<Map<String, dynamic>> addMedicinesToPrescription(
+      int prescriptionId, List<Map<String, dynamic>> medicines) async {
+    return await post(
+      '/prescriptions/$prescriptionId/add-medicines/',
+      {'medicines': medicines},
+    );
+  }
+
+  /// Create a complete prescription manually without uploading an image.
+  /// POST /api/prescriptions/manual/
+  Future<Map<String, dynamic>> createManualPrescription(
+      Map<String, dynamic> prescriptionData) async {
+    return await post('/prescriptions/manual/', prescriptionData);
   }
 
   // ── Prediction APIs ────────────────────────────────────────────────────────
