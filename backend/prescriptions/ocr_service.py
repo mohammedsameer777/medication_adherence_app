@@ -1,14 +1,12 @@
 """
-OCR SERVICE — Gemini Vision primary parser
-Gemini 2.5 Flash reads prescription images directly (free, handles handwriting).
-
+OCR SERVICE
 Priority:
-  1. Gemini Vision  — reads image directly, free tier, handles handwriting + typed
-  2. OCR.space      — free text OCR fallback (25k/month)
+  1. Gemini Vision  — kept as-is (disabled in India, but code stays)
+  2. OCR.space      — free text OCR (25k/month) with IMPROVED regex
   3. Tesseract      — local fallback
 
-Add to Render Environment Variables:
-  GEMINI_API_KEY = "AIzaSyAGDJD-eyp87fZRDf1JbteurbUF_9AABPw"
+IMPROVED: medicine extraction now handles Indian handwritten prescriptions
+with patterns like "Tab Sizodon Plus", "Tab Quetipin 300mg", etc.
 """
 
 import re
@@ -49,14 +47,12 @@ except ImportError:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GEMINI VISION — FREE, reads handwriting perfectly
+# GEMINI VISION — kept as-is (not available in India from server)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _parse_with_gemini_vision(image_path):
     api_key = getattr(settings, 'GEMINI_API_KEY', None) or os.environ.get('GEMINI_API_KEY')
     if not api_key:
-        print("   ⚠️  GEMINI_API_KEY not set.")
-        print("       Add in Render → Environment → GEMINI_API_KEY")
         return None
 
     try:
@@ -111,7 +107,6 @@ Rules:
             "generationConfig": {"temperature": 0.1, "maxOutputTokens": 1024}
         }).encode('utf-8')
 
-        # Models available with this key — best first
         models_to_try = [
             ('v1', 'gemini-2.5-flash'),
             ('v1', 'gemini-2.0-flash'),
@@ -135,14 +130,7 @@ Rules:
                     break
             except urllib.error.HTTPError as he:
                 err_body = he.read().decode()[:200]
-                print(f"   ❌ {model_name} ({api_ver}): HTTP {he.code} — {err_body[:100]}")
-                if he.code == 403:
-                    print("   ⚠️  403 — check GEMINI_API_KEY in Render Environment.")
-                elif he.code == 429:
-                    print("   ℹ️  Rate limit (free tier: 15 req/min). Trying next model...")
-                continue
-            except urllib.error.URLError as ue:
-                print(f"   ❌ {model_name} network error: {ue.reason}")
+                print(f"   ❌ {model_name} ({api_ver}): HTTP {he.code} — {err_body[:80]}")
                 continue
             except Exception as ex:
                 print(f"   ❌ {model_name} unexpected error: {ex}")
@@ -152,15 +140,11 @@ Rules:
             print("   ❌ All Gemini models failed.")
             return None
 
-        # Parse response
         data     = json.loads(raw_text_response)
         raw_text = data['candidates'][0]['content']['parts'][0]['text'].strip()
-
-        # Strip markdown code fences if present
         raw_text = re.sub(r'^```(?:json)?\s*', '', raw_text)
         raw_text = re.sub(r'\s*```$', '', raw_text).strip()
-
-        result = json.loads(raw_text)
+        result   = json.loads(raw_text)
 
         medicines = []
         for m in result.get('medicines', []):
@@ -178,10 +162,8 @@ Rules:
                 dur = 7
             dosage = str(m.get('dosage', '1 tablet')).strip() or '1 tablet'
             medicines.append({
-                'name':          name,
-                'dosage':        dosage,
-                'frequency':     freq,
-                'duration_days': dur,
+                'name': name, 'dosage': dosage,
+                'frequency': freq, 'duration_days': dur,
             })
             print(f"   💊 Gemini: {name} | {dosage} | {freq} | {dur}d")
 
@@ -207,20 +189,13 @@ Rules:
             'treatment_duration_days': duration,
         }
 
-    except urllib.error.HTTPError as e:
-        body = e.read().decode()[:300]
-        print(f"   ❌ Gemini HTTP error {e.code}: {body}")
-        return None
-    except json.JSONDecodeError as e:
-        print(f"   ❌ Gemini JSON parse error: {e}")
-        return None
     except Exception as e:
         print(f"   ❌ Gemini error: {type(e).__name__}: {e}")
         return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TEXT EXTRACTION helpers (Google Vision / OCR.space / Tesseract)
+# TEXT EXTRACTION helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _text_from_google_vision(image_path, gv_client):
@@ -249,8 +224,8 @@ def _text_from_ocrspace(image_path):
             image_data = base64.b64encode(f.read()).decode('utf-8')
         ext      = os.path.splitext(image_path)[1].lower()
         mime_map = {
-            '.jpg':  'image/jpeg', '.jpeg': 'image/jpeg',
-            '.png':  'image/png',  '.bmp':  'image/bmp',
+            '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+            '.png': 'image/png',  '.bmp':  'image/bmp',
         }
         mime_type = mime_map.get(ext, 'image/jpeg')
         payload   = urllib.parse.urlencode({
@@ -261,7 +236,7 @@ def _text_from_ocrspace(image_path):
             'detectOrientation': 'true',
             'scale':             'true',
             'OCREngine':         '2',
-            'isTable':           'true',
+            'isTable':           'false',
         }).encode('utf-8')
         req = urllib.request.Request(
             'https://api.ocr.space/parse/image', data=payload,
@@ -278,6 +253,7 @@ def _text_from_ocrspace(image_path):
             text = parsed[0].get('ParsedText', '').strip()
             if text:
                 print(f"   ✅ OCR.space: {len(text)} chars.")
+                print(f"   📄 OCR raw:\n{text}\n---")
             return text
     except Exception as e:
         print(f"   ❌ OCR.space error: {e}")
@@ -308,7 +284,7 @@ def _text_from_tesseract(image_path):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FIELD EXTRACTORS from raw text
+# FIELD EXTRACTORS
 # ─────────────────────────────────────────────────────────────────────────────
 
 NON_MEDICINE = {
@@ -321,21 +297,25 @@ NON_MEDICINE = {
     'months', 'stat', 'bp', 'hr', 'spo2', 'temp', 'wt', 'weight',
     'free', 'home', 'delivery', 'r', 'rx', 'mg', 'ml', 'tab',
     'reg', 'no', 'city', 'general', 'physician', 'consultant',
-    'dr', 'smith', 'john',
+    'continue', 'other', 'call', 'counselled', 'phone', 'plot',
+    'road', 'colony', 'regd', 'mbbs', 'md', 'dr', 'emergency',
 }
 
 
 def _extract_patient_name(text):
+    # Look for "Mr/Mrs/Ms Name" pattern common in Indian prescriptions
     for pattern in [
+        r'Mr\.?\s+([A-Z][A-Za-z\s]{2,30})',
+        r'Mrs\.?\s+([A-Z][A-Za-z\s]{2,30})',
+        r'Ms\.?\s+([A-Z][A-Za-z\s]{2,30})',
         r'Patient\s*Name\s*[:;-]?\s*([A-Za-z][A-Za-z\s]{2,40})',
         r'Name\s*[:;-]?\s*([A-Za-z][A-Za-z\s]{2,40})',
-        r'Patient\s*[:;-]?\s*([A-Za-z][A-Za-z\s]{2,40})',
     ]:
         m = re.search(pattern, text, re.IGNORECASE)
         if m:
             name = re.sub(r'\s+', ' ', m.group(1).strip())
             name = re.split(
-                r'\b(age|date|phone|address|mr|mrs|dr|sex|gender)\b',
+                r'\b(age|date|phone|address|mr|mrs|dr|sex|gender|yrs|years)\b',
                 name, flags=re.IGNORECASE)[0].strip()
             if 3 <= len(name) <= 50:
                 return name
@@ -344,10 +324,9 @@ def _extract_patient_name(text):
 
 def _extract_age(text):
     for pattern in [
+        r'(\d{1,3})\s*(?:yrs?|years?)',
         r'Age\s*[:;-]?\s*(\d{1,3})',
         r'(\d{1,3})\s*/\s*[MmFf]',
-        r'(\d{1,3})\s*years?',
-        r'(\d{1,3})\s*yrs?',
     ]:
         m = re.search(pattern, text, re.IGNORECASE)
         if m:
@@ -359,30 +338,37 @@ def _extract_age(text):
 
 def _extract_disease(text):
     for pattern in [
-        r'Diagnosis\s*[:;-]?\s*([A-Za-z][A-Za-z\s,]{2,40})',
-        r'Disease\s*[:;-]?\s*([A-Za-z][A-Za-z\s,]{2,40})',
+        r'Diagnosis\s*[:;-]?\s*([A-Za-z][A-Za-z\s,]{2,60})',
         r'Dx\s*[:;-]?\s*([A-Za-z][A-Za-z\s,]{2,40})',
-        r'Condition\s*[:;-]?\s*([A-Za-z][A-Za-z\s,]{2,40})',
         r'(?:C/O|c/o)\s*[:;-]?\s*([A-Za-z][A-Za-z\s,]{2,40})',
     ]:
         m = re.search(pattern, text, re.IGNORECASE)
         if m:
             disease = re.sub(r'\s+', ' ', m.group(1).strip()).split('\n')[0].strip()
-            disease = re.split(
-                r'\b(medicine|dosage|frequency|duration|doctor|physician|hospital|tablet|reg)\b',
-                disease, flags=re.IGNORECASE)[0].strip().rstrip('R').strip()
-            if 3 <= len(disease) <= 60:
+            if 3 <= len(disease) <= 80:
                 return disease
-    common = ['diabetes', 'hypertension', 'fever', 'cold', 'cough',
-              'headache', 'infection', 'asthma', 'arthritis', 'migraine']
+
+    # Common disease keywords in Indian psychiatry prescriptions
+    disease_keywords = [
+        'schizophrenia', 'diabetes', 'hypertension', 'fever', 'cold',
+        'cough', 'headache', 'infection', 'asthma', 'arthritis',
+        'migraine', 'depression', 'anxiety', 'bipolar', 'psychosis',
+        'paranoia', 'epilepsy',
+    ]
     text_lower = text.lower()
-    for d in common:
+    for d in disease_keywords:
         if d in text_lower:
             return d.title()
     return None
 
 
 def _extract_duration(text):
+    # Look for "6 months", "3 months" etc
+    m = re.search(r'(\d+)\s*months?', text, re.IGNORECASE)
+    if m:
+        months = int(m.group(1))
+        return min(months * 30, 365)
+
     for pattern in [
         r'Duration\s*[:;-]?\s*(\d+)\s*days?',
         r'for\s*(\d+)\s*days?',
@@ -397,62 +383,85 @@ def _extract_duration(text):
 
 
 def _extract_medicines_regex(text):
+    """
+    IMPROVED medicine extractor for Indian handwritten prescriptions.
+    Handles patterns like:
+      - "Tab Sizodon Plus"
+      - "Tab Quetipin 300mg"
+      - "Tab Ativan (Lorazepam) 2mg"
+      - "Tab Rivotril 0.5mg (Clonazepam)"
+      - "Tab Serta 50mg"
+    """
     medicines  = []
     seen_names = set()
 
     DOSAGE_RE = re.compile(
         r'\b(\d+(?:\.\d+)?\s*(?:mg|mcg|ml|iu|g|gm|units?|tablet|tab|cap|caps))\b',
         re.IGNORECASE)
-    TIMING_RE = re.compile(r'(\d)\s*[-–]\s*(\d)\s*[-–]\s*(\d)')
-    FREQ_RE   = re.compile(
-        r'(\d+)\s*(?:times?\s*(?:a\s*)?daily|x\s*daily|\/day)', re.IGNORECASE)
-    ABBREV_RE = re.compile(r'\b(OD|BD|TDS|QID)\b', re.IGNORECASE)
-    DUR_RE    = re.compile(r'(\d+)\s*days?', re.IGNORECASE)
-    PREFIX_RE = re.compile(
-        r'^[-–\s]*(?:T\.|T\s+|Tab\.?\s*|Syp\.?\s*|Cap\.?\s*|Inj\.?\s*)',
-        re.IGNORECASE)
-    HEADER_RE = re.compile(
-        r'(?:medicine|drug|medication).*(?:dosage|dose|strength)', re.IGNORECASE)
+    DUR_RE    = re.compile(r'(\d+)\s*(?:days?|months?)', re.IGNORECASE)
 
-    def parse_freq(line):
-        tm = TIMING_RE.search(line)
-        if tm:
-            total = int(tm.group(1)) + int(tm.group(2)) + int(tm.group(3))
-            if 1 <= total <= 6:
+    # Prefix pattern — Tab, T., Syp, Cap, Inj, numbered list items
+    PREFIX_RE = re.compile(
+        r'^(?:\(?[\d①②③④⑤⑥⑦⑧⑨]\)?\.?\s*)?'   # optional numbering
+        r'(?:T\.|T\s+|Tab\.?\s*|Syp\.?\s*|Cap\.?\s*|Inj\.?\s*)',
+        re.IGNORECASE)
+
+    def parse_freq(block):
+        """Parse frequency from a block of text (medicine line + next few lines)."""
+        # Pattern: 1 - x - 1 or x - x - 1 (morning-afternoon-night)
+        timing = re.findall(r'([01x])\s*[-–]\s*([01x])\s*[-–]\s*([01x])', block, re.IGNORECASE)
+        if timing:
+            m_val, a_val, n_val = timing[0]
+            total = sum(1 for v in [m_val, a_val, n_val] if v not in ('x', 'X', '0'))
+            if total > 0:
                 return str(total)
-        ab = ABBREV_RE.search(line)
-        if ab:
-            return {'OD': '1', 'BD': '2', 'TDS': '3', 'QID': '4'}.get(
-                ab.group(1).upper(), '1')
-        fm = FREQ_RE.search(line)
-        if fm:
-            return fm.group(1)
+
+        if re.search(r'\bbd\b|\btwice\b', block, re.IGNORECASE):
+            return '2'
+        if re.search(r'\btds\b|\bthrice\b', block, re.IGNORECASE):
+            return '3'
+        if re.search(r'\bqid\b', block, re.IGNORECASE):
+            return '4'
+        if re.search(r'\bod\b|\bonce\b', block, re.IGNORECASE):
+            return '1'
         return '1'
 
-    def parse_dur(line):
-        dm = DUR_RE.search(line)
-        if dm:
-            d = int(dm.group(1))
+    def parse_dur(block):
+        m = re.search(r'(\d+)\s*months?', block, re.IGNORECASE)
+        if m:
+            return min(int(m.group(1)) * 30, 365)
+        m = re.search(r'(\d+)\s*days?', block, re.IGNORECASE)
+        if m:
+            d = int(m.group(1))
             if 1 <= d <= 365:
                 return d
         return 7
+
+    def clean_name(raw):
+        """Clean medicine name — remove bracketed generics if long enough without."""
+        # Remove trailing bracket content if name is already meaningful
+        name = re.sub(r'\s*\([^)]*\)\s*', ' ', raw).strip()
+        name = re.sub(r'\s+', ' ', name).strip().rstrip('.,;:')
+        return name
 
     def is_non_medicine(name):
         words = name.lower().strip().split()
         return all(w.rstrip('.,;:') in NON_MEDICINE for w in words)
 
-    def add(name, line):
-        name = re.sub(r'\s+', ' ', name.strip().rstrip('.,;:'))
+    def add(name, block):
+        name = clean_name(name)
         if len(name) < 3 or is_non_medicine(name):
             return
         key = name.lower()
         if key in seen_names:
             return
         seen_names.add(key)
-        dm     = DOSAGE_RE.search(line)
+
+        dm     = DOSAGE_RE.search(block)
         dosage = dm.group(1).strip() if dm else '1 tablet'
-        freq   = parse_freq(line)
-        dur    = parse_dur(line)
+        freq   = parse_freq(block)
+        dur    = parse_dur(block)
+
         medicines.append({
             'name':          name,
             'dosage':        dosage,
@@ -461,43 +470,53 @@ def _extract_medicines_regex(text):
         })
         print(f"   💊 Regex: {name} | {dosage} | {freq}x | {dur}d")
 
-    lines    = text.split('\n')
-    s1_lines = set()
+    lines = text.split('\n')
 
-    for i, line in enumerate(lines):
-        line = line.strip()
+    # Pass 1: find lines starting with Tab/T./Cap etc
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
         pm   = PREFIX_RE.match(line)
-        if not pm:
-            continue
-        s1_lines.add(i)
-        nm = re.match(
-            r'^([A-Za-z][A-Za-z0-9\-]{1,30}(?:\s+[A-Za-z][A-Za-z0-9\-]{1,20})?)',
-            line[pm.end():])
-        if nm:
-            add(nm.group(1), line)
+        if pm:
+            rest = line[pm.end():].strip()
 
-    in_table  = False
-    col_split = re.compile(r'[\t]')
-    for i, line in enumerate(lines):
-        if i in s1_lines:
-            continue
-        line_s = line.strip()
-        if HEADER_RE.search(line_s):
-            in_table = True
-            continue
-        if not in_table:
-            continue
-        if not line_s:
-            in_table = False
-            continue
-        cols = [c.strip() for c in col_split.split(line_s) if c.strip()]
-        if len(cols) >= 2:
-            med_name = cols[0]
-            first_w  = med_name.lower().split()[0] if med_name.split() else ''
-            if first_w in NON_MEDICINE or not re.match(r'^[A-Za-z]', med_name):
-                continue
-            if not is_non_medicine(med_name):
-                add(med_name, '\t'.join(cols))
+            # Extract medicine name — up to dosage or bracket
+            nm = re.match(
+                r'^([A-Za-z][A-Za-z0-9\-\s]{1,40}?)(?:\s+\d|\s+\(|\s*$)',
+                rest)
+            if nm:
+                med_name = nm.group(1).strip()
+
+                # Collect this line + next 2 lines as context for freq/dose
+                block_lines = [line]
+                for j in range(1, 3):
+                    if i + j < len(lines):
+                        block_lines.append(lines[i + j].strip())
+                block = ' '.join(block_lines)
+
+                add(med_name, block)
+        i += 1
+
+    # Pass 2: scan for known medicine name patterns if pass 1 found nothing
+    if not medicines:
+        print("   ⚠️  Pass 1 found nothing — trying keyword scan...")
+        # Common Indian medicine keywords
+        KNOWN_PATTERNS = re.compile(
+            r'\b(Sizodon|Quetipin|Qutipin|Ativan|Lorazepam|Rivotril|Clonazepam|'
+            r'Serta|Sertraline|Olanzapine|Risperidone|Haloperidol|Lithium|'
+            r'Depakote|Valproate|Fluoxetine|Escitalopram|Alprazolam|'
+            r'Diazepam|Clonazepam|Amitriptyline|Mirtazapine)\b',
+            re.IGNORECASE)
+        for i, line in enumerate(lines):
+            m = KNOWN_PATTERNS.search(line)
+            if m:
+                med_name = m.group(1)
+                block_lines = [line]
+                for j in range(1, 3):
+                    if i + j < len(lines):
+                        block_lines.append(lines[i + j].strip())
+                block = ' '.join(block_lines)
+                add(med_name, block)
 
     return medicines
 
@@ -530,7 +549,6 @@ class PrescriptionOCR:
             print(f"⚠️  Google Cloud Vision init failed: {e}")
 
     def _get_raw_text(self, image_path):
-        """Get raw text from image using available text-only OCR backends."""
         if self._gv_client is not None:
             text = _text_from_google_vision(image_path, self._gv_client)
             if text and len(text.strip()) > 10:
@@ -545,23 +563,14 @@ class PrescriptionOCR:
         return text or ""
 
     def parse_prescription(self, image_path):
-        """
-        Main entry point.
-        Step 1: Gemini Vision (handles handwriting perfectly)
-        Step 2: Text OCR + regex fallback (for printed prescriptions)
-        """
-
-        # ── Step 1: Gemini Vision ─────────────────────────────────────────────
-        print("   🔮 Trying Gemini Vision (free, reads handwriting)...")
+        # ── Step 1: Gemini Vision ─────────────────────────────────────────
+        print("   🔮 Trying Gemini Vision...")
         gemini_result = _parse_with_gemini_vision(image_path)
 
         if gemini_result is not None:
             raw_text  = self._get_raw_text(image_path)
             medicines = gemini_result['medicines']
-            print(f"   ✅ Final: patient={gemini_result['patient_name']}, "
-                  f"age={gemini_result['age']}, disease={gemini_result['disease']}, "
-                  f"medicines={len(medicines)}, "
-                  f"dur={gemini_result['treatment_duration_days']}d")
+            print(f"   ✅ Final (Gemini): {len(medicines)} medicines")
             return {
                 'success':                 True,
                 'extracted_text':          raw_text,
@@ -573,12 +582,12 @@ class PrescriptionOCR:
                 'total_medicines':         len(medicines),
             }
 
-        # ── Step 2: Text OCR + regex ──────────────────────────────────────────
-        print("   📄 Gemini unavailable — falling back to text OCR + regex...")
+        # ── Step 2: OCR.space + improved regex ───────────────────────────
+        print("   📄 Falling back to OCR.space + regex...")
         raw_text = self._get_raw_text(image_path)
 
         if not raw_text or len(raw_text.strip()) < 5:
-            print("   ⚠️  No text extracted from image.")
+            print("   ⚠️  No text extracted.")
             return {
                 'success':                 True,
                 'extracted_text':          '',
@@ -609,8 +618,6 @@ class PrescriptionOCR:
             'treatment_duration_days': duration,
             'total_medicines':         len(medicines),
         }
-
-    # ── Public compatibility methods ──────────────────────────────────────────
 
     def extract_text(self, image_path):
         return self._get_raw_text(image_path)
