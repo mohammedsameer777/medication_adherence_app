@@ -10,7 +10,11 @@ from .serializers import (
     AdherencePredictionSerializer, PredictionRequestSerializer,
     MLModelSerializer
 )
-from .ml_service import predictor
+
+# FIX: lazy import — stops sklearn crashing the worker at startup
+def _get_predictor():
+    from .ml_service import predictor
+    return predictor
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -70,7 +74,7 @@ def predict_adherence(request):
                 'Insurance_Coverage':        1,
             }
 
-            result = predictor.predict(input_data)
+            result = _get_predictor().predict(input_data)
 
             prediction = AdherencePrediction.objects.create(
                 patient=patient,
@@ -151,7 +155,8 @@ def get_high_risk_patients(request):
 def train_models(request):
     """POST /api/predictions/models/train/"""
     try:
-        results = predictor.train_models()
+        predictor = _get_predictor()
+        results   = predictor.train_models()
 
         saved_models = []
         model_type_map = {
@@ -188,12 +193,12 @@ def train_models(request):
             'success': True,
             'message': 'Models trained successfully',
             'data': {
-                'best_model':        predictor.best_model_name,
-                'best_model_accuracy': 89.42,
-                'selected_features': predictor.get_selected_features(),
+                'best_model':                predictor.best_model_name,
+                'best_model_accuracy':       89.42,
+                'selected_features':         predictor.get_selected_features(),
                 'total_features_engineered': 34,
                 'total_features_selected':   20,
-                'models':            MLModelSerializer(saved_models, many=True).data
+                'models':                    MLModelSerializer(saved_models, many=True).data
             }
         }, status=status.HTTP_201_CREATED)
 
@@ -254,6 +259,7 @@ def get_selected_features(request):
     Returns selected features + all importances for Flutter chart.
     34 engineered features total → 20 selected via RFE.
     """
+    predictor   = _get_predictor()
     features    = predictor.get_selected_features()
     importances = predictor.get_feature_importances()
 
@@ -269,7 +275,7 @@ def get_selected_features(request):
         'success': True,
         'data': {
             'selected_features':        features,
-            'total_features_available': 34,   # 13 original + 21 engineered
+            'total_features_available': 34,
             'features_selected':        len(features),
             'model_used':               'XGBoost',
             'model_accuracy':           89.42,
@@ -290,29 +296,10 @@ def get_selected_features(request):
 def predict_with_features(request):
     """
     POST /api/predictions/predict-smart/
-
-    v5.0 — accepts all 13 original features from the Flutter form.
-    The ML service's engineer_features() computes all 34 features from
-    these 13 inputs on the backend. Any missing field defaults to 0.
-
-    Full body example:
-    {
-        "patient_id":                6,
-        "Age":                       45,
-        "gender_encoded":            1,
-        "medication_type_encoded":   1,
-        "dosage_normalized":         0.7,
-        "Previous_Adherence":        0,
-        "education_encoded":         1,
-        "income_normalized":         0.3,
-        "social_support_encoded":    1,
-        "severity_encoded":          2,
-        "Comorbidities_Count":       3,
-        "healthcare_access_encoded": 1,
-        "mental_health_encoded":     1,
-        "Insurance_Coverage":        1
-    }
+    Accepts all 13 original features from the Flutter form.
     """
+    predictor = _get_predictor()
+
     if not predictor.get_selected_features():
         return Response({
             'success': False,
