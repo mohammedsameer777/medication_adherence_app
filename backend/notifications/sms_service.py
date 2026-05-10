@@ -9,6 +9,11 @@ Key design decisions:
 - _send_sms() is the single send path used by the Celery task.
 - send_medication_reminder() supports send_now=True (test/immediate) or
   send_now=False (schedule only — default).
+
+Reminder time slots:
+  Morning   → 08:00
+  Afternoon → 14:00
+  Night     → 20:00
 """
 
 from django.conf import settings
@@ -21,8 +26,6 @@ from .models import SMSReminder
 class SMSReminderService:
 
     def __init__(self):
-        # FIX: wrap entire __init__ in try/except so a bad Twilio credential
-        # never crashes Django startup or Celery worker import.
         self.use_twilio    = False
         self.client        = None
         self.twilio_number = None
@@ -49,8 +52,6 @@ class SMSReminderService:
             print("⚠️  Twilio credentials incomplete — running in MOCK mode")
             return
 
-        # FIX: import inside method so a missing twilio package does not crash
-        # the module at import time on machines where twilio is not installed.
         try:
             from twilio.rest import Client
             self.client        = Client(account_sid, auth_token)
@@ -74,6 +75,55 @@ class SMSReminderService:
         if len(phone) == 10:
             return f'+91{phone}'
         return f'+{phone}'
+
+    # ── Timing label → dose hours ─────────────────────────────────────────────
+
+    def _timing_to_hours(self, timing_label, times_per_day):
+        """
+        Convert a timing label or times_per_day into a list of hour integers.
+
+        Fixed slots:
+            Morning   = 08:00
+            Afternoon = 14:00
+            Night     = 20:00
+        """
+        t = (timing_label or '').strip().lower()
+
+        # Exact label matches (doctor-selected from chip UI)
+        TIMING_MAP = {
+            'morning':                          [8],
+            'afternoon':                        [14],
+            'evening':                          [14],   # treated as afternoon slot
+            'night':                            [20],
+            'bedtime':                          [20],
+            'morning & night':                  [8, 20],
+            'morning and night':                [8, 20],
+            'twice daily':                      [8, 20],
+            'morning & afternoon':              [8, 14],
+            'morning and afternoon':            [8, 14],
+            'morning, afternoon & night':       [8, 14, 20],
+            'morning, afternoon and night':     [8, 14, 20],
+            'thrice daily':                     [8, 14, 20],
+            '3 times daily':                    [8, 14, 20],
+            'morning, evening, night':          [8, 14, 20],  # legacy label
+            'once daily (morning)':             [8],          # legacy label
+            'morning and night':                [8, 20],      # legacy label
+        }
+
+        if t in TIMING_MAP:
+            return TIMING_MAP[t]
+
+        # Fallback: derive from times_per_day count
+        n = max(int(times_per_day or 1), 1)
+        if n == 1:
+            return [8]
+        if n == 2:
+            return [8, 20]
+        if n == 3:
+            return [8, 14, 20]
+        # 4+ doses: distribute evenly starting at 08:00
+        step = max(1, 12 // n)
+        return [8 + i * step for i in range(n)]
 
     # ── Message builder ───────────────────────────────────────────────────────
 
@@ -135,9 +185,10 @@ class SMSReminderService:
         Write SMSReminder rows to DB only — no SMS is sent here.
         Celery Beat polls every 60 s and calls _send_sms() at the right time.
 
-        FIX: uses timedelta arithmetic instead of datetime.replace() to build
-        scheduled_time, avoiding ValueError on DST-boundary times in pytz
-        managed timezones.
+        Uses the medicine's saved `timing` field to determine hour slots:
+            Morning   → 08:00
+            Afternoon → 14:00
+            Night     → 20:00
         """
         medicines         = prescription.medicines.all()
         reminders_created = []
@@ -147,22 +198,16 @@ class SMSReminderService:
             times_per_day = max(int(medicine.total_doses_per_day or 1), 1)
             duration_days = int(prescription.treatment_duration_days or 7)
 
-            # Hour-of-day schedule for each dose slot
-            if times_per_day == 1:
-                dose_hours = [9]
-            elif times_per_day == 2:
-                dose_hours = [9, 21]
-            elif times_per_day == 3:
-                dose_hours = [8, 14, 20]
-            else:
-                # Spread evenly across waking hours 08:00–22:00
-                step       = 14 // times_per_day
-                dose_hours = [8 + i * step for i in range(times_per_day)]
+            # Resolve hour slots from saved timing label
+            timing_label = getattr(medicine, 'timing', None) or ''
+            dose_hours   = self._timing_to_hours(timing_label, times_per_day)
+
+            print(f"📋 {medicine.medicine_name} | timing='{timing_label}' "
+                  f"→ dose_hours={dose_hours}")
 
             for day in range(duration_days):
                 for hour in dose_hours:
-                    # FIX: build scheduled_time with timedelta from midnight of
-                    # (now + day) to avoid DST-ambiguous datetime.replace().
+                    # Use timedelta arithmetic to avoid DST-boundary issues
                     base_midnight = (now + timedelta(days=day)).replace(
                         hour=0, minute=0, second=0, microsecond=0
                     )
@@ -284,14 +329,11 @@ class SMSReminderService:
 
 
 # ── Module-level singleton ────────────────────────────────────────────────────
-# FIX: wrapped in try/except so a credential failure never prevents Django or
-# Celery from starting. All callers (tasks.py, views.py) import this object.
 try:
     sms_service = SMSReminderService()
 except Exception as _e:
     print(f"❌ CRITICAL: Could not create sms_service singleton: {_e}")
-    # Create a bare instance that operates in MOCK mode
-    sms_service              = SMSReminderService.__new__(SMSReminderService)
-    sms_service.use_twilio   = False
-    sms_service.client       = None
+    sms_service               = SMSReminderService.__new__(SMSReminderService)
+    sms_service.use_twilio    = False
+    sms_service.client        = None
     sms_service.twilio_number = None

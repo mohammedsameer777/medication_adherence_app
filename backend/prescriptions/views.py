@@ -42,27 +42,47 @@ def _parse_doses(frequency_str):
 
 
 def _timing_booleans(doses_per_day):
+    """Auto-generate morning/afternoon/evening/night booleans from dose count."""
     if doses_per_day == 1:
-        return True, False, False, True
+        return True, False, False, False   # morning only
     if doses_per_day == 2:
-        return True, False, False, True
+        return True, False, False, True    # morning + night
     if doses_per_day == 3:
-        return True, False, True, True
+        return True, True, False, True     # morning + afternoon + night
     return True, True, True, True
 
 
 def _timing_label(doses_per_day):
+    """Auto-generate timing label from dose count."""
     labels = {
-        1: 'Once daily (morning)',
-        2: 'Morning and Night',
-        3: 'Morning, Evening, Night',
-        4: 'Morning, Afternoon, Evening, Night',
+        1: 'Morning',
+        2: 'Morning & Night',
+        3: 'Morning, Afternoon & Night',
+        4: 'Morning, Afternoon, Evening & Night',
     }
     return labels.get(doses_per_day, f'{doses_per_day} times daily')
 
 
+def _timing_booleans_from_label(timing_label):
+    """
+    Convert a doctor-selected timing label to
+    morning/afternoon/evening/night booleans.
+    """
+    t = (timing_label or '').lower()
+    morning   = 'morning'   in t
+    afternoon = 'afternoon' in t
+    evening   = 'evening'   in t or 'afternoon' in t
+    night     = 'night'     in t or 'bedtime'   in t
+    return morning, afternoon, evening, night
+
+
 def _create_medicines_from_data(prescription, medicines_data):
-    """Create Medicine objects from OCR or manual data. Returns list of created medicines."""
+    """
+    Create Medicine objects from OCR or manual data.
+    Respects the 'timing' field if provided by the doctor.
+    Falls back to auto-generating timing from frequency if not.
+    Returns list of created Medicine objects.
+    """
     created = []
     for med_data in medicines_data:
         if not isinstance(med_data, dict):
@@ -70,15 +90,25 @@ def _create_medicines_from_data(prescription, medicines_data):
         name = str(med_data.get('name', '')).strip()
         if not name:
             continue
+
         frequency_str = str(med_data.get('frequency', '1 times daily'))
         doses         = _parse_doses(frequency_str)
-        morning, afternoon, evening, night = _timing_booleans(doses)
+
+        # Use doctor-provided timing if present; else auto-generate
+        provided_timing = str(med_data.get('timing', '')).strip()
+        if provided_timing:
+            timing_label = provided_timing
+            morning, afternoon, evening, night = _timing_booleans_from_label(timing_label)
+        else:
+            morning, afternoon, evening, night = _timing_booleans(doses)
+            timing_label = _timing_label(doses)
+
         med = Medicine.objects.create(
             prescription        = prescription,
             medicine_name       = name,
             dosage              = str(med_data.get('dosage', '1 tablet')).strip() or '1 tablet',
             frequency           = frequency_str,
-            timing              = _timing_label(doses),
+            timing              = timing_label,
             duration_days       = int(med_data.get('duration_days') or 7),
             morning             = morning,
             afternoon           = afternoon,
@@ -110,7 +140,8 @@ def _build_medicine_summary(medicines):
         name   = med.medicine_name if hasattr(med, 'medicine_name') else med.get('name', '')
         dosage = med.dosage if hasattr(med, 'dosage') else med.get('dosage', '')
         freq   = med.frequency if hasattr(med, 'frequency') else med.get('frequency', '')
-        lines.append(f"{i}. {name} — {dosage} — {freq}")
+        timing = med.timing if hasattr(med, 'timing') else med.get('timing', '')
+        lines.append(f"{i}. {name} — {dosage} — {freq} [{timing}]")
     return "\n".join(lines)
 
 
@@ -123,7 +154,7 @@ def _build_medicine_summary(medicines):
 def upload_prescription(request):
     """
     Upload prescription image → OCR → save medicines → schedule SMS reminders.
-    Response includes medicine list so doctor can verify and add missing ones.
+    Response includes medicine list (with timing) so doctor can verify and edit.
     """
     serializer = PrescriptionUploadSerializer(data=request.data)
     if not serializer.is_valid():
@@ -166,10 +197,9 @@ def upload_prescription(request):
             'success': True,
             'message': 'Prescription uploaded and processed successfully',
             'data': {
-                'prescription_id':      prescription.id,
-                'reminders_scheduled':  reminders_scheduled,
-                'total_medicines':      len(created_medicines),
-                # Doctor sees this list to verify / add missing medicines
+                'prescription_id':         prescription.id,
+                'reminders_scheduled':     reminders_scheduled,
+                'total_medicines':         len(created_medicines),
                 'extracted_medicines_list': medicine_summary,
                 'prescription': PrescriptionSerializer(prescription).data,
             },
@@ -188,15 +218,17 @@ def add_medicines_manually(request, prescription_id):
     """
     POST /api/prescriptions/<id>/add-medicines/
 
-    Doctor manually adds missing medicines after OCR.
+    Doctor manually adds or REPLACES medicines (and timing) after OCR.
     Body:
     {
       "medicines": [
-        {"name": "Metformin", "dosage": "500mg", "frequency": "2 times daily", "duration_days": 30},
-        {"name": "Atorvastatin", "dosage": "10mg", "frequency": "1 times daily", "duration_days": 30}
+        {"name": "Metformin", "dosage": "500mg", "frequency": "2 times daily",
+         "duration_days": 30, "timing": "Morning & Night"},
+        {"name": "Atorvastatin", "dosage": "10mg", "frequency": "1 times daily",
+         "duration_days": 30, "timing": "Night"}
       ]
     }
-    Also reschedules SMS reminders to include new medicines.
+    Also cancels old 'scheduled' reminders and reschedules with new medicines.
     """
     prescription   = get_object_or_404(Prescription, id=prescription_id)
     medicines_data = request.data.get('medicines', [])
@@ -217,7 +249,16 @@ def add_medicines_manually(request, prescription_id):
     prescription.total_medicines = prescription.medicines.count()
     prescription.save()
 
-    # Reschedule reminders to include new medicines
+    # Cancel old pending reminders, then reschedule everything
+    try:
+        from notifications.models import SMSReminder
+        SMSReminder.objects.filter(
+            patient=prescription.patient,
+            status='scheduled',
+        ).update(status='cancelled')
+    except Exception as e:
+        print(f"⚠️  Could not cancel old reminders: {e}")
+
     reminders_scheduled = _schedule_reminders(prescription)
     medicine_summary    = _build_medicine_summary(prescription.medicines.all())
 
@@ -225,13 +266,13 @@ def add_medicines_manually(request, prescription_id):
         'success': True,
         'message': f'{len(created)} medicine(s) added successfully.',
         'data': {
-            'prescription_id':         prescription.id,
-            'medicines_added':         len(created),
-            'total_medicines':         prescription.total_medicines,
-            'reminders_rescheduled':   reminders_scheduled,
-            'all_medicines_list':      medicine_summary,
-            'new_medicines':           MedicineSerializer(created, many=True).data,
-            'prescription':            PrescriptionSerializer(prescription).data,
+            'prescription_id':       prescription.id,
+            'medicines_added':       len(created),
+            'total_medicines':       prescription.total_medicines,
+            'reminders_rescheduled': reminders_scheduled,
+            'all_medicines_list':    medicine_summary,
+            'new_medicines':         MedicineSerializer(created, many=True).data,
+            'prescription':          PrescriptionSerializer(prescription).data,
         },
     }, status=status.HTTP_201_CREATED)
 
@@ -249,11 +290,11 @@ def create_manual_prescription(request):
       "doctor": 2,
       "disease": "Diabetes",
       "treatment_duration_days": 30,
-      "patient_name": "John Doe",
-      "age": 45,
       "medicines": [
-        {"name": "Metformin", "dosage": "500mg", "frequency": "2 times daily", "duration_days": 30},
-        {"name": "Glimepiride", "dosage": "1mg", "frequency": "1 times daily", "duration_days": 30}
+        {"name": "Metformin", "dosage": "500mg", "frequency": "2 times daily",
+         "duration_days": 30, "timing": "Morning & Night"},
+        {"name": "Glimepiride", "dosage": "1mg", "frequency": "1 times daily",
+         "duration_days": 30, "timing": "Morning"}
       ]
     }
     """
@@ -296,11 +337,11 @@ def create_manual_prescription(request):
         'success': True,
         'message': f'Manual prescription created with {len(created)} medicine(s).',
         'data': {
-            'prescription_id':      prescription.id,
-            'total_medicines':      len(created),
-            'reminders_scheduled':  reminders_scheduled,
-            'medicines_list':       medicine_summary,
-            'prescription':         PrescriptionSerializer(prescription).data,
+            'prescription_id':     prescription.id,
+            'total_medicines':     len(created),
+            'reminders_scheduled': reminders_scheduled,
+            'medicines_list':      medicine_summary,
+            'prescription':        PrescriptionSerializer(prescription).data,
         },
     }, status=status.HTTP_201_CREATED)
 
