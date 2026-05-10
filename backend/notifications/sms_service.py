@@ -10,17 +10,21 @@ Key design decisions:
 - send_medication_reminder() supports send_now=True (test/immediate) or
   send_now=False (schedule only — default).
 
-Reminder time slots:
-  Morning   → 08:00
-  Afternoon → 14:00
-  Night     → 20:00
+Reminder time slots (ALL times are IST — Asia/Kolkata):
+  Morning   → 08:00 IST
+  Afternoon → 14:00 IST
+  Night     → 20:00 IST
 """
 
+import pytz
 from django.conf import settings
 from django.utils import timezone
 from datetime import timedelta
 
 from .models import SMSReminder
+
+# India timezone constant — used everywhere in this file
+IST = pytz.timezone('Asia/Kolkata')
 
 
 class SMSReminderService:
@@ -76,16 +80,16 @@ class SMSReminderService:
             return f'+91{phone}'
         return f'+{phone}'
 
-    # ── Timing label → dose hours ─────────────────────────────────────────────
+    # ── Timing label → dose hours (IST) ──────────────────────────────────────
 
     def _timing_to_hours(self, timing_label, times_per_day):
         """
         Convert a timing label or times_per_day into a list of hour integers.
 
-        Fixed slots:
-            Morning   = 08:00
-            Afternoon = 14:00
-            Night     = 20:00
+        ALL hours are in IST (Asia/Kolkata):
+            Morning   = 08:00 IST
+            Afternoon = 14:00 IST
+            Night     = 20:00 IST
         """
         t = (timing_label or '').strip().lower()
 
@@ -107,7 +111,6 @@ class SMSReminderService:
             '3 times daily':                    [8, 14, 20],
             'morning, evening, night':          [8, 14, 20],  # legacy label
             'once daily (morning)':             [8],          # legacy label
-            'morning and night':                [8, 20],      # legacy label
         }
 
         if t in TIMING_MAP:
@@ -185,14 +188,16 @@ class SMSReminderService:
         Write SMSReminder rows to DB only — no SMS is sent here.
         Celery Beat polls every 60 s and calls _send_sms() at the right time.
 
-        Uses the medicine's saved `timing` field to determine hour slots:
-            Morning   → 08:00
-            Afternoon → 14:00
-            Night     → 20:00
+        FIX: All times are computed in IST (Asia/Kolkata) so that:
+            Morning   → 08:00 IST  (not 08:00 UTC which would be 13:30 IST)
+            Afternoon → 14:00 IST
+            Night     → 20:00 IST
         """
         medicines         = prescription.medicines.all()
         reminders_created = []
-        now               = timezone.now()   # UTC-aware
+
+        # Get current time in IST
+        now_ist = timezone.now().astimezone(IST)
 
         for medicine in medicines:
             times_per_day = max(int(medicine.total_doses_per_day or 1), 1)
@@ -203,15 +208,18 @@ class SMSReminderService:
             dose_hours   = self._timing_to_hours(timing_label, times_per_day)
 
             print(f"📋 {medicine.medicine_name} | timing='{timing_label}' "
-                  f"→ dose_hours={dose_hours}")
+                  f"→ dose_hours={dose_hours} (IST)")
 
             for day in range(duration_days):
                 for hour in dose_hours:
-                    # Use timedelta arithmetic to avoid DST-boundary issues
-                    base_midnight = (now + timedelta(days=day)).replace(
-                        hour=0, minute=0, second=0, microsecond=0
-                    )
-                    scheduled_time = base_midnight + timedelta(hours=hour)
+                    from datetime import datetime as dt
+                    # Compute the target date in IST, then build the slot time
+                    # as a naive IST datetime and localise it.
+                    # e.g. hour=8 → 08:00 IST, NOT 08:00 UTC (which = 13:30 IST)
+                    ist_date   = now_ist.date() + timedelta(days=day)
+                    naive_slot = dt(ist_date.year, ist_date.month, ist_date.day,
+                                    hour, 0, 0, 0)
+                    scheduled_time = IST.localize(naive_slot)
 
                     message = self._create_reminder_message(
                         prescription.patient, medicine)

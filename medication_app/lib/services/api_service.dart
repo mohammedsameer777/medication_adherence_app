@@ -298,6 +298,17 @@ class ApiService {
     );
   }
 
+  /// REPLACE all medicines for an existing prescription (delete old + create new).
+  /// Use this after OCR to save doctor's edits with correct timing.
+  /// POST /api/prescriptions/<id>/update-medicines/
+  Future<Map<String, dynamic>> updateMedicinesForPrescription(
+      int prescriptionId, List<Map<String, dynamic>> medicines) async {
+    return await post(
+      '/prescriptions/$prescriptionId/update-medicines/',
+      {'medicines': medicines},
+    );
+  }
+
   /// Create a complete prescription manually without uploading an image.
   /// POST /api/prescriptions/manual/
   Future<Map<String, dynamic>> createManualPrescription(

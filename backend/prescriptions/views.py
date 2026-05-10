@@ -120,6 +120,18 @@ def _create_medicines_from_data(prescription, medicines_data):
     return created
 
 
+def _cancel_old_reminders(prescription):
+    """Cancel all pending reminders for this prescription's patient."""
+    try:
+        from notifications.models import SMSReminder
+        SMSReminder.objects.filter(
+            patient=prescription.patient,
+            status='scheduled',
+        ).update(status='cancelled')
+    except Exception as e:
+        print(f"⚠️  Could not cancel old reminders: {e}")
+
+
 def _schedule_reminders(prescription):
     """Schedule SMS reminders. Returns count."""
     try:
@@ -214,18 +226,79 @@ def upload_prescription(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
-def add_medicines_manually(request, prescription_id):
+def update_medicines_for_prescription(request, prescription_id):
     """
-    POST /api/prescriptions/<id>/add-medicines/
+    POST /api/prescriptions/<id>/update-medicines/
 
-    Doctor manually adds or REPLACES medicines (and timing) after OCR.
+    REPLACES all medicines for a prescription (deletes old ones, adds new ones).
+    Used when doctor edits OCR-extracted medicines before finalising.
+
     Body:
     {
       "medicines": [
         {"name": "Metformin", "dosage": "500mg", "frequency": "2 times daily",
          "duration_days": 30, "timing": "Morning & Night"},
-        {"name": "Atorvastatin", "dosage": "10mg", "frequency": "1 times daily",
-         "duration_days": 30, "timing": "Night"}
+        ...
+      ]
+    }
+    Also cancels old 'scheduled' reminders and reschedules with the new medicines.
+    """
+    prescription   = get_object_or_404(Prescription, id=prescription_id)
+    medicines_data = request.data.get('medicines', [])
+
+    if not isinstance(medicines_data, list) or not medicines_data:
+        return Response({
+            'success': False,
+            'message': 'Please provide a list of medicines.',
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    # ── DELETE all existing medicines for this prescription ───────────────
+    prescription.medicines.all().delete()
+
+    # ── CREATE new medicines ───────────────────────────────────────────────
+    created = _create_medicines_from_data(prescription, medicines_data)
+    if not created:
+        return Response({
+            'success': False,
+            'message': 'No valid medicines in request.',
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    prescription.total_medicines = len(created)
+    prescription.save()
+
+    # ── Cancel old pending reminders and reschedule ───────────────────────
+    _cancel_old_reminders(prescription)
+    reminders_scheduled = _schedule_reminders(prescription)
+    medicine_summary    = _build_medicine_summary(created)
+
+    return Response({
+        'success': True,
+        'message': f'{len(created)} medicine(s) saved and reminders rescheduled.',
+        'data': {
+            'prescription_id':       prescription.id,
+            'medicines_saved':       len(created),
+            'total_medicines':       prescription.total_medicines,
+            'reminders_rescheduled': reminders_scheduled,
+            'all_medicines_list':    medicine_summary,
+            'medicines':             MedicineSerializer(created, many=True).data,
+            'prescription':          PrescriptionSerializer(prescription).data,
+        },
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def add_medicines_manually(request, prescription_id):
+    """
+    POST /api/prescriptions/<id>/add-medicines/
+
+    Doctor manually APPENDS medicines (and timing) to a prescription.
+    Body:
+    {
+      "medicines": [
+        {"name": "Metformin", "dosage": "500mg", "frequency": "2 times daily",
+         "duration_days": 30, "timing": "Morning & Night"},
+        ...
       ]
     }
     Also cancels old 'scheduled' reminders and reschedules with new medicines.
@@ -250,15 +323,7 @@ def add_medicines_manually(request, prescription_id):
     prescription.save()
 
     # Cancel old pending reminders, then reschedule everything
-    try:
-        from notifications.models import SMSReminder
-        SMSReminder.objects.filter(
-            patient=prescription.patient,
-            status='scheduled',
-        ).update(status='cancelled')
-    except Exception as e:
-        print(f"⚠️  Could not cancel old reminders: {e}")
-
+    _cancel_old_reminders(prescription)
     reminders_scheduled = _schedule_reminders(prescription)
     medicine_summary    = _build_medicine_summary(prescription.medicines.all())
 

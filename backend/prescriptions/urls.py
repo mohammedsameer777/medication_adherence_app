@@ -8,7 +8,10 @@ urlpatterns = [
     # Manual prescription entry (no image needed)
     path('manual/', views.create_manual_prescription, name='manual-prescription'),
 
-    # Add missing medicines to existing prescription
+    # REPLACE all medicines for an existing prescription (used after OCR edit)
+    path('<int:prescription_id>/update-medicines/', views.update_medicines_for_prescription, name='update-medicines'),
+
+    # Add missing medicines to existing prescription (appends, does not delete)
     path('<int:prescription_id>/add-medicines/', views.add_medicines_manually, name='add-medicines'),
 
     # Delete wrong medicine

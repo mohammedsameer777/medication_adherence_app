@@ -972,7 +972,8 @@ class _UploadSuccessDialog extends StatefulWidget {
 class _UploadSuccessDialogState extends State<_UploadSuccessDialog> {
   // Editable medicine list — doctor can fix timing before finalising
   late List<Map<String, dynamic>> _editableMedicines;
-  bool _editMode = false;
+  // Always start in edit mode so doctor sees timing chips right after OCR
+  bool _editMode = true;
 
   static const timingOptions = [
     {'label': '🌅 Morning',       'sub': '8:00 AM',      'value': 'Morning'},
@@ -1019,10 +1020,10 @@ class _UploadSuccessDialogState extends State<_UploadSuccessDialog> {
     );
 
     try {
-      // Delete old reminders and reschedule with updated medicines
-      // We use add-medicines endpoint to reschedule
+      // REPLACE all medicines (delete old ones + create new ones with correct timing)
+      // updateMedicinesForPrescription deletes existing medicines first, then creates new ones
       final result = await widget.apiService
-          .addMedicinesToPrescription(widget.prescriptionId, medicines);
+          .updateMedicinesForPrescription(widget.prescriptionId, medicines);
 
       if (!mounted) return;
       Navigator.pop(context); // close loader
@@ -1053,17 +1054,22 @@ class _UploadSuccessDialogState extends State<_UploadSuccessDialog> {
         const Text('Prescription Uploaded'),
         const Spacer(),
         if (medicines.isNotEmpty)
-          TextButton.icon(
-            icon: Icon(_editMode ? Icons.close : Icons.edit,
-                size: 16,
-                color: _editMode ? Colors.red : Colors.blue),
-            label: Text(
-              _editMode ? 'Cancel' : 'Edit',
-              style: TextStyle(
-                  color: _editMode ? Colors.red : Colors.blue,
-                  fontSize: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.blue.shade50,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.blue.shade200),
             ),
-            onPressed: () => setState(() => _editMode = !_editMode),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.edit, size: 13, color: Colors.blue.shade700),
+              const SizedBox(width: 4),
+              Text('Edit Timing',
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.blue.shade700,
+                      fontWeight: FontWeight.w600)),
+            ]),
           ),
       ]),
       content: SingleChildScrollView(
@@ -1093,60 +1099,13 @@ class _UploadSuccessDialogState extends State<_UploadSuccessDialog> {
                     style: TextStyle(
                         fontWeight: FontWeight.bold, fontSize: 13)),
                 const Spacer(),
-                if (_editMode)
-                  const Text('⚠️ Edit & fix timing',
-                      style:
-                          TextStyle(fontSize: 11, color: Colors.orange)),
+                const Text('⚠️ Review & fix timing',
+                    style: TextStyle(fontSize: 11, color: Colors.orange)),
               ]),
               const SizedBox(height: 6),
 
-              if (!_editMode)
-                // ── Read-only view ────────────────────────────────────────
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Colors.green.shade50,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.green.shade200),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: medicines.asMap().entries.map((e) {
-                      final i = e.key + 1;
-                      final m = e.value as Map<String, dynamic>;
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 3),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '$i. ${m['medicine_name']} — ${m['dosage']} — ${m['frequency']}',
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                            Row(children: [
-                              const SizedBox(width: 14),
-                              Icon(Icons.alarm,
-                                  size: 12,
-                                  color: Colors.blue.shade400),
-                              const SizedBox(width: 3),
-                              Text(
-                                m['timing'] ?? 'Not set',
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    color: Colors.blue.shade600,
-                                    fontStyle: FontStyle.italic),
-                              ),
-                            ]),
-                          ],
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                )
-              else
-                // ── Edit mode ─────────────────────────────────────────────
-                StatefulBuilder(
+              // ── Always show edit mode so doctor can fix timing ────────
+              StatefulBuilder(
                   builder: (ctx, setS) => Column(
                     children: _editableMedicines.asMap().entries.map((e) {
                       final i = e.key;
@@ -1351,32 +1310,18 @@ class _UploadSuccessDialogState extends State<_UploadSuccessDialog> {
         ),
       ),
       actions: [
-        if (_editMode)
-          ElevatedButton.icon(
-            icon: const Icon(Icons.save, size: 16),
-            label: const Text('Save & Reschedule'),
-            style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-                foregroundColor: Colors.white),
-            onPressed: _saveEdits,
-          )
-        else ...[
-          TextButton.icon(
-            icon: const Icon(Icons.add_circle_outline,
-                color: Colors.orange),
-            label: const Text('Add Medicine',
-                style: TextStyle(color: Colors.orange)),
-            onPressed: () {
-              Navigator.pop(context);
-              _showAddMedicineDialog(
-                  context, widget.prescriptionId, widget.apiService);
-            },
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Done'),
-          ),
-        ],
+        ElevatedButton.icon(
+          icon: const Icon(Icons.save, size: 16),
+          label: const Text('Save & Reschedule'),
+          style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green,
+              foregroundColor: Colors.white),
+          onPressed: _saveEdits,
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Skip'),
+        ),
       ],
     );
   }
