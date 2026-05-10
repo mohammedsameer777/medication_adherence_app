@@ -54,8 +54,6 @@ except ImportError:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MASSIVE MEDICINE DATABASE
-# Covers: psychiatric, cardiac, diabetic, antibiotic, ayurvedic,
-#         pain, GI, respiratory, dermatology, vitamins, hormones
 # ─────────────────────────────────────────────────────────────────────────────
 
 MEDICINE_DB = {
@@ -165,7 +163,7 @@ MEDICINE_DB = {
     'paracetamol': 'Paracetamol', 'acetaminophen': 'Paracetamol',
     'crocin': 'Crocin', 'calpol': 'Calpol', 'dolo': 'Dolo',
     'ibuprofen': 'Ibuprofen', 'brufen': 'Brufen', 'advil': 'Advil',
-    'naproxen': 'Naproxen', 'naprosyn': 'Naprosyn', 'naprosyn': 'Naprosyn',
+    'naproxen': 'Naproxen', 'naprosyn': 'Naprosyn',
     'diclofenac': 'Diclofenac', 'voltaren': 'Voltaren', 'voveran': 'Voveran',
     'aceclofenac': 'Aceclofenac', 'hifenac': 'Hifenac',
     'piroxicam': 'Piroxicam', 'feldene': 'Feldene',
@@ -175,7 +173,7 @@ MEDICINE_DB = {
     'celecoxib': 'Celecoxib', 'celebrex': 'Celebrex',
     'tramadol': 'Tramadol', 'ultram': 'Ultram', 'tramazac': 'Tramazac',
     'morphine': 'Morphine', 'ms contin': 'MS Contin',
-    'codeine': 'Codeine', 'tylenol with codeine': 'Tylenol With Codeine',
+    'codeine': 'Codeine',
     'pregabalin': 'Pregabalin', 'lyrica': 'Lyrica', 'pregeb': 'Pregeb',
     'gabapentin': 'Gabapentin', 'neurontin': 'Neurontin', 'gabantin': 'Gabantin',
 
@@ -215,7 +213,7 @@ MEDICINE_DB = {
     'dextromethorphan': 'Dextromethorphan', 'benylin': 'Benylin',
     'guaifenesin': 'Guaifenesin', 'mucinex': 'Mucinex',
     'ambroxol': 'Ambroxol', 'mucosolvan': 'Mucosolvan', 'ambrodil': 'Ambrodil',
-    'bromhexine': 'Bromhexine', 'bисolvon': 'Bisolvon',
+    'bromhexine': 'Bromhexine',
     'ipratropium': 'Ipratropium', 'atrovent': 'Atrovent',
     'tiotropium': 'Tiotropium', 'spiriva': 'Spiriva',
     'theophylline': 'Theophylline', 'theodur': 'Theodur',
@@ -226,7 +224,7 @@ MEDICINE_DB = {
     'carbimazole': 'Carbimazole', 'neo mercazole': 'Neo Mercazole',
     'propylthiouracil': 'Propylthiouracil', 'ptu': 'PTU',
 
-    # ── VITAMINS / MINERALS / SUPPLEMENTS ────────────────────────────────
+    # ── VITAMINS / MINERALS ───────────────────────────────────────────────
     'vitamin b12': 'Vitamin B12', 'methylcobalamin': 'Methylcobalamin',
     'cyanocobalamin': 'Cyanocobalamin', 'neurobion': 'Neurobion',
     'vitamin d': 'Vitamin D', 'vitamin d3': 'Vitamin D3',
@@ -239,9 +237,7 @@ MEDICINE_DB = {
     'magnesium': 'Magnesium', 'magnesia': 'Magnesia',
     'multivitamin': 'Multivitamin', 'supradyn': 'Supradyn', 'becosules': 'Becosules',
     'omega 3': 'Omega 3', 'fish oil': 'Fish Oil',
-    'biotin': 'Biotin',
-    'coenzyme q10': 'Coenzyme Q10',
-    'glucosamine': 'Glucosamine',
+    'biotin': 'Biotin', 'coenzyme q10': 'Coenzyme Q10', 'glucosamine': 'Glucosamine',
 
     # ── STEROIDS / HORMONES ────────────────────────────────────────────────
     'prednisolone': 'Prednisolone', 'prednisone': 'Prednisone',
@@ -259,12 +255,10 @@ MEDICINE_DB = {
     'miconazole': 'Miconazole', 'daktarin': 'Daktarin',
     'terbinafine': 'Terbinafine', 'lamisil': 'Lamisil',
     'permethrin': 'Permethrin', 'elimite': 'Elimite',
-    'calamine': 'Calamine',
-    'tretinoin': 'Tretinoin', 'retin-a': 'Retin-A',
+    'calamine': 'Calamine', 'tretinoin': 'Tretinoin', 'retin-a': 'Retin-A',
     'adapalene': 'Adapalene', 'differin': 'Differin',
     'benzoyl peroxide': 'Benzoyl Peroxide',
-    'salicylic acid': 'Salicylic Acid',
-    'coal tar': 'Coal Tar',
+    'salicylic acid': 'Salicylic Acid', 'coal tar': 'Coal Tar',
 
     # ── UROLOGY ────────────────────────────────────────────────────────────
     'tamsulosin': 'Tamsulosin', 'flomax': 'Flomax', 'urimax': 'Urimax',
@@ -273,28 +267,20 @@ MEDICINE_DB = {
     'oxybutynin': 'Oxybutynin', 'ditropan': 'Ditropan',
     'solifenacin': 'Solifenacin', 'vesicare': 'Vesicare',
 
-    # ── AYURVEDIC / HERBAL (Indian) ───────────────────────────────────────
+    # ── AYURVEDIC / HERBAL ────────────────────────────────────────────────
     'kanchnar guggul': 'Kanchnar Guggul', 'kanchanar guggul': 'Kanchnar Guggul',
     'kanchanan guggul': 'Kanchnar Guggul', 'kanchanar': 'Kanchnar Guggul',
     'chandraprabha vati': 'Chandraprabha Vati', 'chandraprabha': 'Chandraprabha Vati',
     'chandraprabb': 'Chandraprabha Vati',
     'triphala': 'Triphala', 'triphala churna': 'Triphala Churna',
-    'ashwagandha': 'Ashwagandha', 'withania somnifera': 'Ashwagandha',
-    'brahmi': 'Brahmi', 'bacopa monnieri': 'Brahmi',
-    'shilajit': 'Shilajit',
-    'tulsi': 'Tulsi', 'ocimum sanctum': 'Tulsi',
-    'neem': 'Neem', 'azadirachta': 'Neem',
-    'giloy': 'Giloy', 'guduchi': 'Giloy',
-    'amla': 'Amla', 'amalaki': 'Amla',
-    'haritaki': 'Haritaki',
-    'bibhitaki': 'Bibhitaki',
-    'guggul': 'Guggul',
+    'ashwagandha': 'Ashwagandha', 'brahmi': 'Brahmi', 'shilajit': 'Shilajit',
+    'tulsi': 'Tulsi', 'neem': 'Neem', 'giloy': 'Giloy', 'guduchi': 'Giloy',
+    'amla': 'Amla', 'amalaki': 'Amla', 'haritaki': 'Haritaki',
+    'bibhitaki': 'Bibhitaki', 'guggul': 'Guggul',
     'boswellia': 'Boswellia', 'shallaki': 'Shallaki',
     'curcumin': 'Curcumin', 'turmeric': 'Turmeric',
-    'ginger': 'Ginger', 'zingiber': 'Ginger',
-    'garlic': 'Garlic', 'allium sativum': 'Garlic',
-    'punarnava': 'Punarnava',
-    'shatavari': 'Shatavari',
+    'ginger': 'Ginger', 'garlic': 'Garlic',
+    'punarnava': 'Punarnava', 'shatavari': 'Shatavari',
     'triphala guggul': 'Triphala Guggul',
     'arogyavardhini': 'Arogyavardhini Vati',
     'kaishor guggul': 'Kaishor Guggul',
@@ -302,41 +288,20 @@ MEDICINE_DB = {
     'gokshuradi guggul': 'Gokshuradi Guggul',
     'yograj guggul': 'Yograj Guggul',
     'maharasnadi kwath': 'Maharasnadi Kwath',
-    'dashmoola': 'Dashmoola',
-    'bala': 'Bala',
-    'chyawanprash': 'Chyawanprash',
+    'dashmoola': 'Dashmoola', 'bala': 'Bala', 'chyawanprash': 'Chyawanprash',
     'safi': 'Safi', 'hamdard safi': 'Hamdard Safi',
     'liv 52': 'Liv 52', 'liv52': 'Liv 52',
-    'septilin': 'Septilin',
-    'ayurslim': 'Ayurslim',
+    'septilin': 'Septilin', 'ayurslim': 'Ayurslim',
     'tentex forte': 'Tentex Forte', 'tentex': 'Tentex Forte',
-    'styplon': 'Styplon',
-    'sigon': 'Sigon',
-    'cruel': 'Cruel',
-    'pilex': 'Pilex',
-    'diabecon': 'Diabecon',
-    'glucocare': 'Glucocare',
-    'himcolin': 'Himcolin',
-    'lukol': 'Lukol',
-    'mentat': 'Mentat',
-    'reosto': 'Reosto',
-    'rumalaya': 'Rumalaya',
-    'speman': 'Speman',
-    'v gel': 'V Gel',
-    'abana': 'Abana',
-    'bonnisan': 'Bonnisan',
-    'bresol': 'Bresol',
-    'geriforte': 'Geriforte',
-    'immunol': 'Immunol',
-    'nefrotec': 'Nefrotec',
-    'ophthacare': 'Ophthacare',
-    'prostane': 'Prostane',
-    'renalka': 'Renalka',
-    'serpina': 'Serpina',
-    'shigru': 'Shigru',
-    'talekt': 'Talekt',
-    'ushira': 'Ushira',
-    'vasaka': 'Vasaka',
+    'styplon': 'Styplon', 'sigon': 'Sigon', 'cruel': 'Cruel',
+    'pilex': 'Pilex', 'diabecon': 'Diabecon', 'glucocare': 'Glucocare',
+    'himcolin': 'Himcolin', 'lukol': 'Lukol', 'mentat': 'Mentat',
+    'reosto': 'Reosto', 'rumalaya': 'Rumalaya', 'speman': 'Speman',
+    'v gel': 'V Gel', 'abana': 'Abana', 'bonnisan': 'Bonnisan',
+    'bresol': 'Bresol', 'geriforte': 'Geriforte', 'immunol': 'Immunol',
+    'nefrotec': 'Nefrotec', 'ophthacare': 'Ophthacare', 'prostane': 'Prostane',
+    'renalka': 'Renalka', 'serpina': 'Serpina', 'shigru': 'Shigru',
+    'talekt': 'Talekt', 'ushira': 'Ushira', 'vasaka': 'Vasaka',
 
     # ── OPHTHALMOLOGY ─────────────────────────────────────────────────────
     'timolol': 'Timolol', 'timoptol': 'Timoptol',
@@ -346,19 +311,16 @@ MEDICINE_DB = {
     'moxifloxacin': 'Moxifloxacin', 'vigamox': 'Vigamox',
     'tobramycin': 'Tobramycin', 'tobrex': 'Tobrex',
 
-    # ── ANTI-MALARIAL / TROPICAL ──────────────────────────────────────────
+    # ── ANTI-MALARIAL ─────────────────────────────────────────────────────
     'chloroquine': 'Chloroquine', 'aralen': 'Aralen',
     'hydroxychloroquine': 'Hydroxychloroquine', 'plaquenil': 'Plaquenil',
     'artemether': 'Artemether', 'lumefantrine': 'Lumefantrine',
-    'quinine': 'Quinine',
-    'doxycycline': 'Doxycycline',
-    'primaquine': 'Primaquine',
+    'quinine': 'Quinine', 'primaquine': 'Primaquine',
 
     # ── MISC ──────────────────────────────────────────────────────────────
     'allopurinol': 'Allopurinol', 'zyloprim': 'Zyloprim',
     'colchicine': 'Colchicine', 'colcrys': 'Colcrys',
     'methotrexate': 'Methotrexate', 'rheumatrex': 'Rheumatrex',
-    'hydroxychloroquine': 'Hydroxychloroquine',
     'sulfasalazine': 'Sulfasalazine', 'azulfidine': 'Azulfidine',
     'leflunomide': 'Leflunomide', 'arava': 'Arava',
     'silymarin': 'Silymarin', 'legalon': 'Legalon', 'silybon': 'Silybon',
@@ -376,7 +338,7 @@ MEDICINE_DB = {
     'dantrolene': 'Dantrolene', 'dantrium': 'Dantrium',
 }
 
-# Build prefix lookup for fast fuzzy matching
+# Build prefix lookup
 MEDICINE_PREFIXES = {}
 for name in MEDICINE_DB:
     prefix = name[:4].lower() if len(name) >= 4 else name.lower()
@@ -386,12 +348,9 @@ for name in MEDICINE_DB:
 
 
 def _lookup_medicine(word):
-    """Fast fuzzy lookup — returns canonical name or None."""
     word = word.lower().strip()
-    # Exact match
     if word in MEDICINE_DB:
         return MEDICINE_DB[word]
-    # Prefix match (first 5 chars)
     for length in [6, 5, 4]:
         if len(word) >= length:
             prefix = word[:length]
@@ -436,7 +395,7 @@ Rules: Extract ALL medicines. Tab/Cap/Syp prefix = tablet/capsule/syrup. Return 
                 req = urllib.request.Request(url, data=payload,
                     headers={"Content-Type": "application/json"}, method="POST")
                 with urllib.request.urlopen(req, timeout=30) as resp:
-                    raw = resp.read().decode("utf-8")
+                    raw  = resp.read().decode("utf-8")
                     print(f"   ✅ {model_name} OK!")
                     data = json.loads(raw)
                     text = data['candidates'][0]['content']['parts'][0]['text'].strip()
@@ -450,24 +409,28 @@ Rules: Extract ALL medicines. Tab/Cap/Syp prefix = tablet/capsule/syrup. Return 
                         name = str(m['name']).strip()
                         if len(name) < 2:
                             continue
-                        fm = re.search(r'(\d+)', str(m.get('frequency','1')))
+                        fm   = re.search(r'(\d+)', str(m.get('frequency', '1')))
                         freq = f"{fm.group(1)} times daily" if fm else "1 times daily"
                         try:
                             dur = max(1, min(int(m.get('duration_days', 7)), 365))
-                        except:
+                        except Exception:
                             dur = 7
                         medicines.append({'name': name,
-                            'dosage': str(m.get('dosage','1 tablet')).strip() or '1 tablet',
-                            'frequency': freq, 'duration_days': dur})
+                            'dosage':        str(m.get('dosage', '1 tablet')).strip() or '1 tablet',
+                            'frequency':     freq,
+                            'duration_days': dur})
                         print(f"   💊 Gemini: {name}")
                     age = result.get('age')
                     try:
                         age = int(age)
-                        if not (1 <= age <= 120): age = None
-                    except: age = None
+                        if not (1 <= age <= 120):
+                            age = None
+                    except Exception:
+                        age = None
                     try:
                         duration = max(1, min(int(result.get('treatment_duration_days', 7)), 365))
-                    except: duration = 7
+                    except Exception:
+                        duration = 7
                     print(f"   ✅ Gemini: {len(medicines)} medicines")
                     return {'patient_name': result.get('patient_name'), 'age': age,
                             'disease': result.get('disease'), 'medicines': medicines,
@@ -592,6 +555,7 @@ TAB_PREFIX_RE = re.compile(
     r'Lotion\.?\s*|Susp\.?\s*|Solution\.?\s*)',
     re.IGNORECASE)
 
+# Lines to always skip — headers, footers, OCR noise
 SKIP_LINE_RE = re.compile(
     r'(?:dr\.|doctor|hospital|clinic|mbbs|bams|bds|bam|mba|md\.|m\.d\.|'
     r'phone|tel:|mob:|tele|address|plot|road|colony|nagar|sector|'
@@ -601,9 +565,11 @@ SKIP_LINE_RE = re.compile(
     r'in emergency|for other|mbbs|ms\.|dnb\.|frcs\.|consult|'
     r'follow up|next visit|review after|report|investigation|'
     r'x-ray|scan|mri|ct|ultrasound|lab|test|ecg|echo|'
-    r'call me|contact|if any problem|advice|counsel)',
+    r'call me|contact|if any problem|advice|counsel|'
+    r'mariss|six months|months\s+\(|counselled over)',  # ← OCR noise patterns
     re.IGNORECASE)
 
+# Words that are NEVER medicine names
 NON_MEDICINE_WORDS = {
     'prescription','patient','doctor','date','diagnosis','name','age','gender',
     'sex','hospital','clinic','address','phone','signature','frequency',
@@ -621,7 +587,11 @@ NON_MEDICINE_WORDS = {
     'with','without','empty','stomach','bed','wake','sleep','milk','problem',
     'issue','complaint','history','report','investigation','super','spl',
     'ref','advice','follow','review','next','visit','per','each','every',
-    'take','use','apply','add','give','start','continue','stop','hold',
+    'use','add','give','start','continue','stop','hold',
+    # ── OCR noise words (misreads of duration/instructions) ───────────────
+    'mariss','mariss','nishi','nisw','niswe','nisht','morine','lvishl',
+    'brblen','inseten','contime','denda','olha','sugen','bpl',
+    'six','month','continue','call','between','problem','other',
 }
 
 
@@ -641,8 +611,9 @@ def _parse_freq(block):
         return m.group(1)
     m = FREQ_ABB_RE.search(block)
     if m:
-        return {'od':'1','bd':'2','tds':'3','qid':'4','bid':'2','tid':'3',
-                'once':'1','twice':'2','thrice':'3'}.get(m.group(1).lower(),'1')
+        return {'od': '1', 'bd': '2', 'tds': '3', 'qid': '4',
+                'bid': '2', 'tid': '3', 'once': '1',
+                'twice': '2', 'thrice': '3'}.get(m.group(1).lower(), '1')
     return '1'
 
 
@@ -688,7 +659,6 @@ def _clean_name(raw):
     name = raw.strip().strip('•-–()[].,;:①②③④⑤⑥⑦⑧⑨⑩*/#@')
     name = re.sub(r'\s+', ' ', name).strip()
     name = re.sub(r'\s+\d+\s*(?:mg|ml|mcg|tab|cap)\b.*$', '', name, flags=re.IGNORECASE)
-    # Fix common OCR splits
     name = re.sub(r'\bSome\b', '', name, flags=re.IGNORECASE).strip()
     return name.title().strip()
 
@@ -703,7 +673,7 @@ def _extract_patient_name(text):
         if m:
             name = re.sub(r'\s+', ' ', m.group(1).strip())
             name = re.split(r'\b(age|date|phone|yrs|years|sex|gender)\b',
-                name, flags=re.IGNORECASE)[0].strip().rstrip('.,;:')
+                            name, flags=re.IGNORECASE)[0].strip().rstrip('.,;:')
             if 3 <= len(name) <= 50:
                 return name
     return None
@@ -772,9 +742,9 @@ def _extract_duration(text):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _extract_medicines_regex(text):
-    medicines  = []
-    seen_keys  = set()
-    lines      = [l.strip() for l in text.split('\n')]
+    medicines = []
+    seen_keys = set()
+    lines     = [l.strip() for l in text.split('\n')]
     global_dur = _extract_duration(text)
 
     def get_block(i, n=2):
@@ -788,14 +758,12 @@ def _extract_medicines_regex(text):
 
     def add(raw_name, block, source=''):
         name = _clean_name(raw_name)
-        # Try database lookup first
         db_result = _lookup_medicine(name)
         if db_result:
             name = db_result
         if not _is_valid_name(name):
             return
         key = re.sub(r'\s+', ' ', name.lower().strip())
-        # Dedup — skip similar names
         for seen in seen_keys:
             overlap = sum(1 for c in key if c in seen) / max(len(key), 1)
             if (key in seen or seen in key or
@@ -812,13 +780,11 @@ def _extract_medicines_regex(text):
         })
         print(f"   💊 [{source}] {name} | {dosage} | {freq}x | {dur}d")
 
-    # ── PASS A: Database scan — known medicine names ──────────────────────
-    # Build a regex from all medicine DB keys (sorted longest first to avoid partial matches)
+    # ── PASS A: Database scan ─────────────────────────────────────────────
     db_keys_sorted = sorted(MEDICINE_DB.keys(), key=len, reverse=True)
-    # Build chunks of 200 names to avoid regex too large
     chunk_size = 200
     for chunk_start in range(0, len(db_keys_sorted), chunk_size):
-        chunk = db_keys_sorted[chunk_start:chunk_start + chunk_size]
+        chunk   = db_keys_sorted[chunk_start:chunk_start + chunk_size]
         pattern = r'\b(' + '|'.join(re.escape(k) for k in chunk) + r')\b'
         try:
             chunk_re = re.compile(pattern, re.IGNORECASE)
@@ -839,11 +805,9 @@ def _extract_medicines_regex(text):
         if not pm:
             continue
         rest = line[pm.end():].strip()
-        # Remove Tab/Cap prefix after number
-        pm2 = TAB_PREFIX_RE.match(rest)
+        pm2  = TAB_PREFIX_RE.match(rest)
         if pm2:
             rest = rest[pm2.end():].strip()
-        # Extract name
         nm = re.match(r'^([A-Za-z][A-Za-z0-9\s\-\.]{2,40}?)(?=\s*[\d(]|\s*$|\s+[xX×])', rest)
         if nm:
             add(nm.group(1).strip(), get_block(i), 'NUM')
@@ -871,7 +835,7 @@ def _extract_medicines_regex(text):
             nm = re.match(r'^([A-Za-z][A-Za-z0-9\s\-\.]{2,35}?)\s+\d', line)
             if nm:
                 candidate = nm.group(1).strip()
-                words = candidate.lower().split()
+                words     = candidate.lower().split()
                 if any(w not in NON_MEDICINE_WORDS for w in words):
                     add(candidate, get_block(i), 'DOSE')
 
@@ -924,9 +888,9 @@ class PrescriptionOCR:
             return {
                 'success': True, 'extracted_text': raw_text,
                 'patient_name': gemini_result['patient_name'],
-                'age': gemini_result['age'],
-                'disease': gemini_result['disease'],
-                'medicines': medicines,
+                'age':          gemini_result['age'],
+                'disease':      gemini_result['disease'],
+                'medicines':    medicines,
                 'treatment_duration_days': gemini_result['treatment_duration_days'],
                 'total_medicines': len(medicines),
             }
@@ -954,13 +918,13 @@ class PrescriptionOCR:
         return {
             'success': True, 'extracted_text': raw_text,
             'patient_name': patient_name, 'age': age, 'disease': disease,
-            'medicines': medicines, 'treatment_duration_days': duration,
+            'medicines':    medicines, 'treatment_duration_days': duration,
             'total_medicines': len(medicines),
         }
 
-    def extract_text(self, image_path): return self._get_raw_text(image_path)
-    def extract_patient_name(self, text): return _extract_patient_name(text)
-    def extract_age(self, text):          return _extract_age(text)
-    def extract_disease(self, text):      return _extract_disease(text)
-    def extract_duration(self, text):     return _extract_duration(text)
-    def extract_medicines(self, text):    return _extract_medicines_regex(text)
+    def extract_text(self, image_path):          return self._get_raw_text(image_path)
+    def extract_patient_name(self, text):         return _extract_patient_name(text)
+    def extract_age(self, text):                  return _extract_age(text)
+    def extract_disease(self, text):              return _extract_disease(text)
+    def extract_duration(self, text):             return _extract_duration(text)
+    def extract_medicines(self, text):            return _extract_medicines_regex(text)
