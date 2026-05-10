@@ -229,7 +229,6 @@ class _DoctorDashboardState extends State<DoctorDashboard> {
             data['extracted_medicines_list'] as String? ?? '';
 
         int remindersScheduled = data['reminders_scheduled'] ?? 0;
-        // Also try calling schedule endpoint for extra reliability
         try {
           final reminderResult =
               await _apiService.scheduleReminders(prescriptionId);
@@ -242,6 +241,9 @@ class _DoctorDashboardState extends State<DoctorDashboard> {
 
         if (!mounted) return;
         Navigator.pop(context);
+
+        // ── Show extracted medicines for doctor to REVIEW & EDIT ──────────
+        final medicines = prescription['medicines'] as List<dynamic>? ?? [];
         showDialog(
           context: context,
           builder: (_) => _UploadSuccessDialog(
@@ -250,6 +252,7 @@ class _DoctorDashboardState extends State<DoctorDashboard> {
             extractedMedicinesList: extractedMedicinesList,
             prescriptionId: prescriptionId,
             apiService: _apiService,
+            extractedMedicines: medicines,
           ),
         );
         _loadData();
@@ -273,7 +276,7 @@ class _DoctorDashboardState extends State<DoctorDashboard> {
     final formKey = GlobalKey<FormState>();
     final diseaseController = TextEditingController();
     final durationController = TextEditingController(text: '30');
-    final List<Map<String, TextEditingController>> medicineControllers = [];
+    final List<Map<String, dynamic>> medicineControllers = [];
 
     // Add first medicine row by default
     medicineControllers.add({
@@ -281,6 +284,7 @@ class _DoctorDashboardState extends State<DoctorDashboard> {
       'dosage': TextEditingController(text: '1 tablet'),
       'frequency': TextEditingController(text: '1 times daily'),
       'duration': TextEditingController(text: '30'),
+      'timing': 'Morning',  // string state, not controller
     });
 
     await showDialog(
@@ -323,64 +327,14 @@ class _DoctorDashboardState extends State<DoctorDashboard> {
                     ...medicineControllers.asMap().entries.map((entry) {
                       final i = entry.key;
                       final c = entry.value;
-                      return Card(
-                        margin: const EdgeInsets.only(bottom: 10),
-                        color: Colors.blue.shade50,
-                        child: Padding(
-                          padding: const EdgeInsets.all(10),
-                          child: Column(children: [
-                            Row(children: [
-                              Text('Medicine ${i + 1}',
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.bold)),
-                              const Spacer(),
-                              if (medicineControllers.length > 1)
-                                IconButton(
-                                  icon: const Icon(Icons.remove_circle,
-                                      color: Colors.red, size: 20),
-                                  onPressed: () {
-                                    setDialogState(
-                                        () => medicineControllers.removeAt(i));
-                                  },
-                                ),
-                            ]),
-                            TextFormField(
-                              controller: c['name'],
-                              decoration: const InputDecoration(
-                                  labelText: 'Medicine Name',
-                                  isDense: true),
-                              validator: (v) =>
-                                  v?.isEmpty ?? true ? 'Required' : null,
-                            ),
-                            const SizedBox(height: 6),
-                            Row(children: [
-                              Expanded(
-                                child: TextFormField(
-                                  controller: c['dosage'],
-                                  decoration: const InputDecoration(
-                                      labelText: 'Dosage', isDense: true),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: TextFormField(
-                                  controller: c['duration'],
-                                  decoration: const InputDecoration(
-                                      labelText: 'Days', isDense: true),
-                                  keyboardType: TextInputType.number,
-                                ),
-                              ),
-                            ]),
-                            const SizedBox(height: 6),
-                            TextFormField(
-                              controller: c['frequency'],
-                              decoration: const InputDecoration(
-                                  labelText:
-                                      'Frequency (e.g. 2 times daily)',
-                                  isDense: true),
-                            ),
-                          ]),
-                        ),
+                      return _MedicineEntryCard(
+                        index: i,
+                        controllers: c,
+                        showRemove: medicineControllers.length > 1,
+                        onRemove: () => setDialogState(
+                            () => medicineControllers.removeAt(i)),
+                        onTimingChanged: (val) =>
+                            setDialogState(() => c['timing'] = val),
                       );
                     }),
                     TextButton.icon(
@@ -388,12 +342,12 @@ class _DoctorDashboardState extends State<DoctorDashboard> {
                         setDialogState(() {
                           medicineControllers.add({
                             'name': TextEditingController(),
-                            'dosage':
-                                TextEditingController(text: '1 tablet'),
+                            'dosage': TextEditingController(text: '1 tablet'),
                             'frequency': TextEditingController(
                                 text: '1 times daily'),
                             'duration': TextEditingController(
                                 text: durationController.text),
+                            'timing': 'Morning',
                           });
                         });
                       },
@@ -436,7 +390,7 @@ class _DoctorDashboardState extends State<DoctorDashboard> {
     required int patientId,
     required String disease,
     required int durationDays,
-    required List<Map<String, TextEditingController>> medicineControllers,
+    required List<Map<String, dynamic>> medicineControllers,
   }) async {
     showDialog(
       context: context,
@@ -447,14 +401,18 @@ class _DoctorDashboardState extends State<DoctorDashboard> {
       if (_doctorId == null) throw Exception('Session expired.');
       final medicines = medicineControllers.map((c) {
         return {
-          'name': c['name']!.text.trim(),
-          'dosage': c['dosage']!.text.trim().isEmpty
+          'name': (c['name'] as TextEditingController).text.trim(),
+          'dosage': (c['dosage'] as TextEditingController).text.trim().isEmpty
               ? '1 tablet'
-              : c['dosage']!.text.trim(),
-          'frequency': c['frequency']!.text.trim().isEmpty
-              ? '1 times daily'
-              : c['frequency']!.text.trim(),
-          'duration_days': int.tryParse(c['duration']!.text) ?? durationDays,
+              : (c['dosage'] as TextEditingController).text.trim(),
+          'frequency':
+              (c['frequency'] as TextEditingController).text.trim().isEmpty
+                  ? '1 times daily'
+                  : (c['frequency'] as TextEditingController).text.trim(),
+          'duration_days':
+              int.tryParse((c['duration'] as TextEditingController).text) ??
+                  durationDays,
+          'timing': c['timing'] as String? ?? 'Morning',
         };
       }).toList();
 
@@ -496,8 +454,7 @@ class _DoctorDashboardState extends State<DoctorDashboard> {
                     const Text('Medicines:',
                         style: TextStyle(fontWeight: FontWeight.bold)),
                     const SizedBox(height: 4),
-                    Text(list,
-                        style: const TextStyle(fontSize: 13)),
+                    Text(list, style: const TextStyle(fontSize: 13)),
                   ],
                 ],
               ),
@@ -818,14 +775,186 @@ class _DoctorDashboardState extends State<DoctorDashboard> {
   }
 }
 
+// ── Medicine Entry Card (used in manual prescription) ────────────────────────
+
+class _MedicineEntryCard extends StatelessWidget {
+  final int index;
+  final Map<String, dynamic> controllers;
+  final bool showRemove;
+  final VoidCallback onRemove;
+  final ValueChanged<String> onTimingChanged;
+
+  const _MedicineEntryCard({
+    required this.index,
+    required this.controllers,
+    required this.showRemove,
+    required this.onRemove,
+    required this.onTimingChanged,
+  });
+
+  static const timingOptions = [
+    {'label': '🌅 Morning',           'sub': '8:00 AM',        'value': 'Morning'},
+    {'label': '☀️ Afternoon',          'sub': '2:00 PM',        'value': 'Afternoon'},
+    {'label': '🌙 Night',              'sub': '8:00 PM',        'value': 'Night'},
+    {'label': '🌅🌙 Morn & Night',     'sub': '8AM & 8PM',      'value': 'Morning & Night'},
+    {'label': '🌅☀️🌙 3× Daily',       'sub': '8AM,2PM,8PM',   'value': 'Morning, Afternoon & Night'},
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final selectedTiming = controllers['timing'] as String? ?? 'Morning';
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      color: Colors.blue.shade50,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Text('Medicine ${index + 1}',
+                style: const TextStyle(fontWeight: FontWeight.bold)),
+            const Spacer(),
+            if (showRemove)
+              IconButton(
+                icon: const Icon(Icons.remove_circle,
+                    color: Colors.red, size: 20),
+                onPressed: onRemove,
+              ),
+          ]),
+          TextFormField(
+            controller: controllers['name'] as TextEditingController,
+            decoration: const InputDecoration(
+                labelText: 'Medicine Name', isDense: true),
+            validator: (v) => v?.isEmpty ?? true ? 'Required' : null,
+          ),
+          const SizedBox(height: 6),
+          Row(children: [
+            Expanded(
+              child: TextFormField(
+                controller: controllers['dosage'] as TextEditingController,
+                decoration:
+                    const InputDecoration(labelText: 'Dosage', isDense: true),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextFormField(
+                controller: controllers['duration'] as TextEditingController,
+                decoration:
+                    const InputDecoration(labelText: 'Days', isDense: true),
+                keyboardType: TextInputType.number,
+              ),
+            ),
+          ]),
+          const SizedBox(height: 6),
+          TextFormField(
+            controller: controllers['frequency'] as TextEditingController,
+            decoration: const InputDecoration(
+                labelText: 'Frequency (e.g. 2 times daily)',
+                isDense: true),
+          ),
+          const SizedBox(height: 10),
+          // ── Timing Selector ─────────────────────────────────────────────
+          Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.blue.shade200),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Icon(Icons.alarm, size: 15, color: Colors.blue.shade700),
+                  const SizedBox(width: 5),
+                  Text(
+                    'Reminder Timing',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.blue.shade700,
+                        fontWeight: FontWeight.w600),
+                  ),
+                ]),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: timingOptions.map((opt) {
+                    final isSelected = selectedTiming == opt['value'];
+                    return GestureDetector(
+                      onTap: () => onTimingChanged(opt['value']!),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 150),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: isSelected
+                              ? Colors.blue.shade600
+                              : Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: isSelected
+                                ? Colors.blue.shade800
+                                : Colors.grey.shade300,
+                            width: isSelected ? 1.5 : 1,
+                          ),
+                          boxShadow: isSelected
+                              ? [
+                                  BoxShadow(
+                                      color: Colors.blue.shade200,
+                                      blurRadius: 4,
+                                      offset: const Offset(0, 2))
+                                ]
+                              : [],
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              opt['label']!,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: isSelected
+                                    ? Colors.white
+                                    : Colors.grey.shade700,
+                              ),
+                            ),
+                            Text(
+                              opt['sub']!,
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: isSelected
+                                    ? Colors.white70
+                                    : Colors.grey.shade500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ],
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
 // ── Upload Success Dialog ─────────────────────────────────────────────────────
 
-class _UploadSuccessDialog extends StatelessWidget {
+class _UploadSuccessDialog extends StatefulWidget {
   final Map<String, dynamic> prescription;
   final int remindersScheduled;
   final String extractedMedicinesList;
   final int prescriptionId;
   final ApiService apiService;
+  final List<dynamic> extractedMedicines;
 
   const _UploadSuccessDialog({
     required this.prescription,
@@ -833,17 +962,109 @@ class _UploadSuccessDialog extends StatelessWidget {
     required this.extractedMedicinesList,
     required this.prescriptionId,
     required this.apiService,
+    required this.extractedMedicines,
   });
 
   @override
+  State<_UploadSuccessDialog> createState() => _UploadSuccessDialogState();
+}
+
+class _UploadSuccessDialogState extends State<_UploadSuccessDialog> {
+  // Editable medicine list — doctor can fix timing before finalising
+  late List<Map<String, dynamic>> _editableMedicines;
+  bool _editMode = false;
+
+  static const timingOptions = [
+    {'label': '🌅 Morning',       'sub': '8:00 AM',      'value': 'Morning'},
+    {'label': '☀️ Afternoon',      'sub': '2:00 PM',      'value': 'Afternoon'},
+    {'label': '🌙 Night',          'sub': '8:00 PM',      'value': 'Night'},
+    {'label': '🌅🌙 Morn & Night', 'sub': '8AM & 8PM',    'value': 'Morning & Night'},
+    {'label': '🌅☀️🌙 3× Daily',   'sub': '8AM,2PM,8PM', 'value': 'Morning, Afternoon & Night'},
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    // Build editable list from extracted medicines
+    _editableMedicines = widget.extractedMedicines.map((m) {
+      final map = m as Map<String, dynamic>;
+      return {
+        'id': map['id'],
+        'nameCtrl': TextEditingController(
+            text: map['medicine_name'] ?? ''),
+        'dosageCtrl': TextEditingController(text: map['dosage'] ?? ''),
+        'frequencyCtrl':
+            TextEditingController(text: map['frequency'] ?? ''),
+        'timing': map['timing'] ?? 'Morning',
+      };
+    }).toList();
+  }
+
+  Future<void> _saveEdits() async {
+    // Build updated medicines payload
+    final medicines = _editableMedicines.map((m) => {
+          'name': (m['nameCtrl'] as TextEditingController).text.trim(),
+          'dosage':
+              (m['dosageCtrl'] as TextEditingController).text.trim(),
+          'frequency':
+              (m['frequencyCtrl'] as TextEditingController).text.trim(),
+          'timing': m['timing'] as String,
+          'duration_days': widget.prescription['treatment_duration_days'] ?? 7,
+        }).toList();
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      // Delete old reminders and reschedule with updated medicines
+      // We use add-medicines endpoint to reschedule
+      final result = await widget.apiService
+          .addMedicinesToPrescription(widget.prescriptionId, medicines);
+
+      if (!mounted) return;
+      Navigator.pop(context); // close loader
+      Navigator.pop(context); // close this dialog
+
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(result['success'] == true
+            ? '✅ Medicines updated & reminders rescheduled!'
+            : 'Failed to update medicines'),
+        backgroundColor: result['success'] == true ? Colors.green : Colors.red,
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Error: $e'), backgroundColor: Colors.red));
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final medicines = prescription['medicines'] as List<dynamic>? ?? [];
+    final medicines = widget.prescription['medicines'] as List<dynamic>? ?? [];
 
     return AlertDialog(
-      title: const Row(children: [
-        Icon(Icons.check_circle, color: Colors.green),
-        SizedBox(width: 8),
-        Text('Prescription Uploaded'),
+      title: Row(children: [
+        const Icon(Icons.check_circle, color: Colors.green),
+        const SizedBox(width: 8),
+        const Text('Prescription Uploaded'),
+        const Spacer(),
+        if (medicines.isNotEmpty)
+          TextButton.icon(
+            icon: Icon(_editMode ? Icons.close : Icons.edit,
+                size: 16,
+                color: _editMode ? Colors.red : Colors.blue),
+            label: Text(
+              _editMode ? 'Cancel' : 'Edit',
+              style: TextStyle(
+                  color: _editMode ? Colors.red : Colors.blue,
+                  fontSize: 12),
+            ),
+            onPressed: () => setState(() => _editMode = !_editMode),
+          ),
       ]),
       content: SingleChildScrollView(
         child: Column(
@@ -853,48 +1074,197 @@ class _UploadSuccessDialog extends StatelessWidget {
             const Text('OCR extraction complete.',
                 style: TextStyle(color: Colors.grey, fontSize: 13)),
             const Divider(height: 20),
-            if (prescription['patient_name_extracted'] != null)
+            if (widget.prescription['patient_name_extracted'] != null)
               _infoRow(Icons.person, 'Patient',
-                  prescription['patient_name_extracted']),
-            if (prescription['disease_extracted'] != null)
+                  widget.prescription['patient_name_extracted']),
+            if (widget.prescription['disease_extracted'] != null)
               _infoRow(Icons.medical_services, 'Disease',
-                  prescription['disease_extracted']),
+                  widget.prescription['disease_extracted']),
             _infoRow(Icons.medication, 'Medicines',
-                '${prescription['total_medicines'] ?? 0} found'),
+                '${widget.prescription['total_medicines'] ?? 0} found'),
             _infoRow(Icons.calendar_today, 'Duration',
-                '${prescription['treatment_duration_days'] ?? 7} days'),
+                '${widget.prescription['treatment_duration_days'] ?? 7} days'),
 
-            // ── Extracted medicine names list ─────────────────────────────
+            // ── Extracted / Editable medicines ────────────────────────────
             if (medicines.isNotEmpty) ...[
               const Divider(height: 16),
-              const Text('Extracted Medicines:',
-                  style: TextStyle(
-                      fontWeight: FontWeight.bold, fontSize: 13)),
+              Row(children: [
+                const Text('Extracted Medicines:',
+                    style: TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 13)),
+                const Spacer(),
+                if (_editMode)
+                  const Text('⚠️ Edit & fix timing',
+                      style:
+                          TextStyle(fontSize: 11, color: Colors.orange)),
+              ]),
               const SizedBox(height: 6),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.green.shade50,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.green.shade200),
+
+              if (!_editMode)
+                // ── Read-only view ────────────────────────────────────────
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.green.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.green.shade200),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: medicines.asMap().entries.map((e) {
+                      final i = e.key + 1;
+                      final m = e.value as Map<String, dynamic>;
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 3),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '$i. ${m['medicine_name']} — ${m['dosage']} — ${m['frequency']}',
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                            Row(children: [
+                              const SizedBox(width: 14),
+                              Icon(Icons.alarm,
+                                  size: 12,
+                                  color: Colors.blue.shade400),
+                              const SizedBox(width: 3),
+                              Text(
+                                m['timing'] ?? 'Not set',
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.blue.shade600,
+                                    fontStyle: FontStyle.italic),
+                              ),
+                            ]),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                )
+              else
+                // ── Edit mode ─────────────────────────────────────────────
+                StatefulBuilder(
+                  builder: (ctx, setS) => Column(
+                    children: _editableMedicines.asMap().entries.map((e) {
+                      final i = e.key;
+                      final m = e.value;
+                      return Card(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        color: Colors.blue.shade50,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                        child: Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Medicine ${i + 1}',
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12)),
+                              const SizedBox(height: 4),
+                              TextField(
+                                controller: m['nameCtrl']
+                                    as TextEditingController,
+                                decoration: const InputDecoration(
+                                    labelText: 'Name',
+                                    isDense: true,
+                                    contentPadding: EdgeInsets.symmetric(
+                                        vertical: 6, horizontal: 8)),
+                              ),
+                              const SizedBox(height: 4),
+                              Row(children: [
+                                Expanded(
+                                  child: TextField(
+                                    controller: m['dosageCtrl']
+                                        as TextEditingController,
+                                    decoration: const InputDecoration(
+                                        labelText: 'Dosage',
+                                        isDense: true,
+                                        contentPadding: EdgeInsets.symmetric(
+                                            vertical: 6, horizontal: 8)),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: TextField(
+                                    controller: m['frequencyCtrl']
+                                        as TextEditingController,
+                                    decoration: const InputDecoration(
+                                        labelText: 'Frequency',
+                                        isDense: true,
+                                        contentPadding: EdgeInsets.symmetric(
+                                            vertical: 6, horizontal: 8)),
+                                  ),
+                                ),
+                              ]),
+                              const SizedBox(height: 8),
+                              // Timing chips
+                              Text('Reminder Time:',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      color: Colors.blue.shade700,
+                                      fontWeight: FontWeight.w600)),
+                              const SizedBox(height: 4),
+                              Wrap(
+                                spacing: 4,
+                                runSpacing: 4,
+                                children: timingOptions.map((opt) {
+                                  final sel =
+                                      m['timing'] == opt['value'];
+                                  return GestureDetector(
+                                    onTap: () => setS(() =>
+                                        m['timing'] = opt['value']),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color: sel
+                                            ? Colors.blue.shade600
+                                            : Colors.grey.shade100,
+                                        borderRadius:
+                                            BorderRadius.circular(14),
+                                        border: Border.all(
+                                          color: sel
+                                              ? Colors.blue.shade800
+                                              : Colors.grey.shade300,
+                                        ),
+                                      ),
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(opt['label']!,
+                                              style: TextStyle(
+                                                  fontSize: 10,
+                                                  fontWeight:
+                                                      FontWeight.w600,
+                                                  color: sel
+                                                      ? Colors.white
+                                                      : Colors
+                                                          .grey.shade700)),
+                                          Text(opt['sub']!,
+                                              style: TextStyle(
+                                                  fontSize: 9,
+                                                  color: sel
+                                                      ? Colors.white70
+                                                      : Colors
+                                                          .grey.shade500)),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                }).toList(),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: medicines.asMap().entries.map((e) {
-                    final i = e.key + 1;
-                    final m = e.value as Map<String, dynamic>;
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 2),
-                      child: Text(
-                        '$i. ${m['medicine_name']} — '
-                        '${m['dosage']} — ${m['frequency']}',
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                    );
-                  }).toList(),
-                ),
-              ),
             ] else ...[
               const Divider(height: 16),
               Container(
@@ -910,7 +1280,8 @@ class _UploadSuccessDialog extends StatelessWidget {
                   Expanded(
                     child: Text(
                       'No medicines extracted. Please add them manually.',
-                      style: TextStyle(fontSize: 12, color: Colors.orange),
+                      style:
+                          TextStyle(fontSize: 12, color: Colors.orange),
                     ),
                   ),
                 ]),
@@ -923,21 +1294,21 @@ class _UploadSuccessDialog extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: remindersScheduled > 0
+                color: widget.remindersScheduled > 0
                     ? Colors.green.shade50
                     : Colors.orange.shade50,
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
-                    color: remindersScheduled > 0
+                    color: widget.remindersScheduled > 0
                         ? Colors.green.shade300
                         : Colors.orange.shade300),
               ),
               child: Row(children: [
                 Icon(
-                  remindersScheduled > 0
+                  widget.remindersScheduled > 0
                       ? Icons.notifications_active
                       : Icons.notifications_off,
-                  color: remindersScheduled > 0
+                  color: widget.remindersScheduled > 0
                       ? Colors.green
                       : Colors.orange,
                   size: 18,
@@ -945,12 +1316,12 @@ class _UploadSuccessDialog extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    remindersScheduled > 0
-                        ? '$remindersScheduled reminder(s) scheduled ✅'
+                    widget.remindersScheduled > 0
+                        ? '${widget.remindersScheduled} reminder(s) scheduled ✅'
                         : 'No reminders — add medicines first.',
                     style: TextStyle(
                         fontSize: 12,
-                        color: remindersScheduled > 0
+                        color: widget.remindersScheduled > 0
                             ? Colors.green.shade700
                             : Colors.orange.shade700),
                   ),
@@ -971,7 +1342,8 @@ class _UploadSuccessDialog extends StatelessWidget {
                 Expanded(
                   child: Text(
                       'Use "AI Predict" button to run adherence prediction.',
-                      style: TextStyle(fontSize: 12, color: Colors.blue)),
+                      style:
+                          TextStyle(fontSize: 12, color: Colors.blue)),
                 ),
               ]),
             ),
@@ -979,20 +1351,32 @@ class _UploadSuccessDialog extends StatelessWidget {
         ),
       ),
       actions: [
-        // ── Add Missing Medicine button ────────────────────────────────────
-        TextButton.icon(
-          icon: const Icon(Icons.add_circle_outline, color: Colors.orange),
-          label: const Text('Add Medicine',
-              style: TextStyle(color: Colors.orange)),
-          onPressed: () {
-            Navigator.pop(context);
-            _showAddMedicineDialog(context, prescriptionId, apiService);
-          },
-        ),
-        ElevatedButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Done'),
-        ),
+        if (_editMode)
+          ElevatedButton.icon(
+            icon: const Icon(Icons.save, size: 16),
+            label: const Text('Save & Reschedule'),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green,
+                foregroundColor: Colors.white),
+            onPressed: _saveEdits,
+          )
+        else ...[
+          TextButton.icon(
+            icon: const Icon(Icons.add_circle_outline,
+                color: Colors.orange),
+            label: const Text('Add Medicine',
+                style: TextStyle(color: Colors.orange)),
+            onPressed: () {
+              Navigator.pop(context);
+              _showAddMedicineDialog(
+                  context, widget.prescriptionId, widget.apiService);
+            },
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Done'),
+          ),
+        ],
       ],
     );
   }
@@ -1006,20 +1390,30 @@ class _UploadSuccessDialog extends StatelessWidget {
         Text('$label: ',
             style: const TextStyle(
                 fontWeight: FontWeight.bold, fontSize: 13)),
-        Expanded(child: Text('$value', style: const TextStyle(fontSize: 13))),
+        Expanded(
+            child: Text('$value', style: const TextStyle(fontSize: 13))),
       ]),
     );
   }
 
   static void _showAddMedicineDialog(
       BuildContext context, int prescriptionId, ApiService apiService) {
-    final List<Map<String, TextEditingController>> rows = [
+    final List<Map<String, dynamic>> rows = [
       {
         'name': TextEditingController(),
         'dosage': TextEditingController(text: '1 tablet'),
         'frequency': TextEditingController(text: '1 times daily'),
         'duration': TextEditingController(text: '7'),
+        'timing': 'Morning',
       }
+    ];
+
+    const timingOpts = [
+      {'label': '🌅 Morning',       'sub': '8:00 AM',      'value': 'Morning'},
+      {'label': '☀️ Afternoon',      'sub': '2:00 PM',      'value': 'Afternoon'},
+      {'label': '🌙 Night',          'sub': '8:00 PM',      'value': 'Night'},
+      {'label': '🌅🌙 Morn & Night', 'sub': '8AM & 8PM',    'value': 'Morning & Night'},
+      {'label': '🌅☀️🌙 3× Daily',   'sub': '8AM,2PM,8PM', 'value': 'Morning, Afternoon & Night'},
     ];
 
     showDialog(
@@ -1060,15 +1454,18 @@ class _UploadSuccessDialog extends StatelessWidget {
                               ),
                           ]),
                           TextField(
-                            controller: c['name'],
+                            controller:
+                                c['name'] as TextEditingController,
                             decoration: const InputDecoration(
-                                labelText: 'Medicine Name', isDense: true),
+                                labelText: 'Medicine Name',
+                                isDense: true),
                           ),
                           const SizedBox(height: 6),
                           Row(children: [
                             Expanded(
                               child: TextField(
-                                controller: c['dosage'],
+                                controller:
+                                    c['dosage'] as TextEditingController,
                                 decoration: const InputDecoration(
                                     labelText: 'Dosage', isDense: true),
                               ),
@@ -1076,7 +1473,8 @@ class _UploadSuccessDialog extends StatelessWidget {
                             const SizedBox(width: 8),
                             Expanded(
                               child: TextField(
-                                controller: c['duration'],
+                                controller: c['duration']
+                                    as TextEditingController,
                                 decoration: const InputDecoration(
                                     labelText: 'Days', isDense: true),
                                 keyboardType: TextInputType.number,
@@ -1085,9 +1483,87 @@ class _UploadSuccessDialog extends StatelessWidget {
                           ]),
                           const SizedBox(height: 6),
                           TextField(
-                            controller: c['frequency'],
+                            controller:
+                                c['frequency'] as TextEditingController,
                             decoration: const InputDecoration(
                                 labelText: 'Frequency', isDense: true),
+                          ),
+                          const SizedBox(height: 8),
+                          // Timing chips
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(8),
+                              border:
+                                  Border.all(color: Colors.orange.shade200),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(children: [
+                                  Icon(Icons.alarm,
+                                      size: 13,
+                                      color: Colors.orange.shade700),
+                                  const SizedBox(width: 4),
+                                  Text('Reminder Timing',
+                                      style: TextStyle(
+                                          fontSize: 11,
+                                          color: Colors.orange.shade700,
+                                          fontWeight: FontWeight.w600)),
+                                ]),
+                                const SizedBox(height: 6),
+                                Wrap(
+                                  spacing: 4,
+                                  runSpacing: 4,
+                                  children: timingOpts.map((opt) {
+                                    final sel =
+                                        c['timing'] == opt['value'];
+                                    return GestureDetector(
+                                      onTap: () => setS(
+                                          () => c['timing'] = opt['value']),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: sel
+                                              ? Colors.orange.shade600
+                                              : Colors.grey.shade100,
+                                          borderRadius:
+                                              BorderRadius.circular(14),
+                                          border: Border.all(
+                                              color: sel
+                                                  ? Colors.orange.shade800
+                                                  : Colors.grey.shade300),
+                                        ),
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Text(opt['label']!,
+                                                style: TextStyle(
+                                                    fontSize: 10,
+                                                    fontWeight:
+                                                        FontWeight.w600,
+                                                    color: sel
+                                                        ? Colors.white
+                                                        : Colors.grey
+                                                            .shade700)),
+                                            Text(opt['sub']!,
+                                                style: TextStyle(
+                                                    fontSize: 9,
+                                                    color: sel
+                                                        ? Colors.white70
+                                                        : Colors.grey
+                                                            .shade500)),
+                                          ],
+                                        ),
+                                      ),
+                                    );
+                                  }).toList(),
+                                ),
+                              ],
+                            ),
                           ),
                         ]),
                       ),
@@ -1101,6 +1577,7 @@ class _UploadSuccessDialog extends StatelessWidget {
                           'frequency': TextEditingController(
                               text: '1 times daily'),
                           'duration': TextEditingController(text: '7'),
+                          'timing': 'Morning',
                         })),
                     icon: const Icon(Icons.add),
                     label: const Text('Add Another'),
@@ -1119,24 +1596,45 @@ class _UploadSuccessDialog extends StatelessWidget {
               onPressed: () async {
                 Navigator.pop(ctx);
                 final medicines = rows
-                    .where((c) => c['name']!.text.trim().isNotEmpty)
+                    .where((c) => (c['name'] as TextEditingController)
+                        .text
+                        .trim()
+                        .isNotEmpty)
                     .map((c) => {
-                          'name': c['name']!.text.trim(),
-                          'dosage': c['dosage']!.text.trim().isEmpty
-                              ? '1 tablet'
-                              : c['dosage']!.text.trim(),
+                          'name': (c['name'] as TextEditingController)
+                              .text
+                              .trim(),
+                          'dosage':
+                              (c['dosage'] as TextEditingController)
+                                          .text
+                                          .trim()
+                                          .isEmpty
+                                  ? '1 tablet'
+                                  : (c['dosage'] as TextEditingController)
+                                      .text
+                                      .trim(),
                           'frequency':
-                              c['frequency']!.text.trim().isEmpty
+                              (c['frequency'] as TextEditingController)
+                                          .text
+                                          .trim()
+                                          .isEmpty
                                   ? '1 times daily'
-                                  : c['frequency']!.text.trim(),
-                          'duration_days':
-                              int.tryParse(c['duration']!.text) ?? 7,
+                                  : (c['frequency']
+                                          as TextEditingController)
+                                      .text
+                                      .trim(),
+                          'duration_days': int.tryParse(
+                                  (c['duration'] as TextEditingController)
+                                      .text) ??
+                              7,
+                          'timing': c['timing'] as String? ?? 'Morning',
                         })
                     .toList();
                 if (medicines.isEmpty) return;
                 try {
-                  final result = await apiService.addMedicinesToPrescription(
-                      prescriptionId, medicines);
+                  final result =
+                      await apiService.addMedicinesToPrescription(
+                          prescriptionId, medicines);
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                       content: Text(result['success'] == true
@@ -1229,13 +1727,13 @@ class _PatientCard extends StatelessWidget {
           ]),
           const SizedBox(height: 10),
 
-          // Row 1: Upload Rx | Manual Entry
           Row(children: [
             Expanded(
               child: OutlinedButton.icon(
                 onPressed: onUpload,
                 icon: const Icon(Icons.upload_file, size: 15),
-                label: const Text('Upload Rx', style: TextStyle(fontSize: 12)),
+                label:
+                    const Text('Upload Rx', style: TextStyle(fontSize: 12)),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: Colors.blue,
                   side: const BorderSide(color: Colors.blue),
@@ -1250,7 +1748,8 @@ class _PatientCard extends StatelessWidget {
               child: OutlinedButton.icon(
                 onPressed: onManual,
                 icon: const Icon(Icons.edit_note, size: 15),
-                label: const Text('Manual Rx', style: TextStyle(fontSize: 12)),
+                label:
+                    const Text('Manual Rx', style: TextStyle(fontSize: 12)),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: Colors.orange,
                   side: const BorderSide(color: Colors.orange),
@@ -1263,13 +1762,13 @@ class _PatientCard extends StatelessWidget {
           ]),
           const SizedBox(height: 6),
 
-          // Row 2: Monitor | AI Predict
           Row(children: [
             Expanded(
               child: ElevatedButton.icon(
                 onPressed: onMonitor,
                 icon: const Icon(Icons.monitor_heart, size: 15),
-                label: const Text('Monitor', style: TextStyle(fontSize: 12)),
+                label:
+                    const Text('Monitor', style: TextStyle(fontSize: 12)),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.teal,
                   foregroundColor: Colors.white,
@@ -1284,7 +1783,8 @@ class _PatientCard extends StatelessWidget {
               child: ElevatedButton.icon(
                 onPressed: onSmartPredict,
                 icon: const Icon(Icons.psychology, size: 15),
-                label: const Text('AI Predict', style: TextStyle(fontSize: 12)),
+                label: const Text('AI Predict',
+                    style: TextStyle(fontSize: 12)),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.deepPurple,
                   foregroundColor: Colors.white,
